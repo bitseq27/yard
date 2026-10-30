@@ -1,0 +1,270 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pixel Sway — docs</title>
+<style>
+  :root { --bg:#101014; --panel:#1b1b22; --panel2:#20202a; --line:#2c2c36; --txt:#d8d8e0;
+          --dim:#8a8a98; --acc:#5ad0a0; --warn:#e0b060; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--txt); margin:0;
+         font:14px/1.55 ui-monospace,Consolas,monospace; }
+  header { position:sticky; top:0; display:flex; align-items:center; gap:10px;
+           padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  .brand { font-weight:700; letter-spacing:.5px; }
+  .badge { background:var(--acc); color:#08110c; border-radius:4px; padding:1px 6px; font-size:11px; }
+  header a { color:var(--acc); text-decoration:none; margin-left:auto; }
+  main { max-width:980px; margin:0 auto; padding:22px 18px 80px; }
+  nav { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+        padding:10px 14px; margin-bottom:22px; columns:2; column-gap:32px; }
+  nav a { display:block; color:var(--txt); text-decoration:none; padding:2px 0; }
+  nav a:hover { color:var(--acc); }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:16px; color:var(--acc); margin:34px 0 10px; padding-bottom:4px;
+       border-bottom:1px solid var(--line); }
+  h3 { font-size:13px; color:var(--warn); margin:18px 0 6px; }
+  p, li { color:var(--txt); }
+  .dim { color:var(--dim); }
+  code { background:var(--panel2); border:1px solid var(--line); border-radius:4px;
+         padding:0 4px; font-size:12.5px; }
+  pre { background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+        padding:10px 12px; overflow-x:auto; font-size:12.5px; }
+  table { border-collapse:collapse; width:100%; margin:10px 0; font-size:12.5px; }
+  th, td { border:1px solid var(--line); padding:5px 8px; text-align:left; vertical-align:top; }
+  th { background:var(--panel); color:var(--acc); }
+  td:first-child { white-space:nowrap; }
+  .kbd { background:#262630; border:1px solid var(--line); border-bottom-width:2px;
+         border-radius:4px; padding:0 5px; font-size:12px; }
+  .note { background:var(--panel); border-left:3px solid var(--warn); padding:8px 12px;
+          border-radius:0 6px 6px 0; margin:10px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Pixel Sway <span class="badge">M5</span></div>
+  <span class="dim">documentation</span>
+  <a href="/">← back to the editor</a>
+</header>
+<main>
+<h1>Pixel Sway — pixel-art animation editor</h1>
+<p class="dim">Turn a static pixel-art scene into a seamlessly looping animation and a
+game-ready sprite bundle. Everything runs locally: stdlib Python server + numpy/PIL
+engine, single-file browser editor, no external dependencies.</p>
+
+<nav>
+  <a href="#quickstart">1 · Quick start</a>
+  <a href="#masking">2 · Masking tools</a>
+  <a href="#catalog">3 · Animation catalog</a>
+  <a href="#shadow">4 · Shadow sync</a>
+  <a href="#timeline">5 · Timeline &amp; exports</a>
+  <a href="#projects">6 · Projects &amp; presets</a>
+  <a href="#bundle">7 · Game bundle format</a>
+  <a href="#api">8 · HTTP API</a>
+  <a href="#engine">9 · Engine rules</a>
+  <a href="#perf">10 · Performance &amp; concurrency</a>
+  <a href="#keys">11 · Keyboard shortcuts</a>
+  <a href="#trouble">12 · Troubleshooting</a>
+</nav>
+
+<h2 id="quickstart">1 · Quick start</h2>
+<ol>
+  <li><b>Load</b> a pixel-art PNG (drag &amp; drop, or <i>Load image</i>). The editor
+      detects the pixel grid and works at the art's native resolution.</li>
+  <li><b>Auto-seg</b> (<span class="kbd">A</span>) proposes objects (plants, pots,
+      water, lamps…) and regions (ground, walls). Accept the ones you want — each
+      becomes an editable mask.</li>
+  <li>Pick a mask and choose an <b>anim type</b> in the inspector (right panel);
+      tune speed/amplitude, or apply a <b>preset</b>.</li>
+  <li><b>Render</b> in the timeline bar (bottom) — the frame strip previews the loop;
+      the audit line must read <code>stray 0</code>.</li>
+  <li><b>Export GIF</b> (preview, ≤2&nbsp;MB discipline) and/or <b>Export bundle</b>
+      (game-ready zip, §7).</li>
+</ol>
+<div class="note">Loops are seamless by construction: every waveform completes an
+integer number of cycles in N frames, and the audit checks frame N−1 → 0 too.</div>
+
+<h2 id="masking">2 · Masking tools</h2>
+<table>
+  <tr><th>tool</th><th>key</th><th>what it does</th></tr>
+  <tr><td>Brush</td><td><span class="kbd">B</span></td><td>paint/erase mask pixels at the native grid (nib size in the rail)</td></tr>
+  <tr><td>Wand</td><td><span class="kbd">W</span></td><td>flood-select by colour tolerance; adds to (or subtracts from) the mask</td></tr>
+  <tr><td>Auto-seg</td><td><span class="kbd">A</span></td><td>segment + recognise the whole scene; presents an accept-list</td></tr>
+  <tr><td>Edge ops</td><td>—</td><td>grow/shrink/solid the selected mask (server-side morphology)</td></tr>
+</table>
+<p>Masks are stored as row-run RLE in the project doc — tiny JSON, exact pixels.
+Objects animate; <b>regions</b> (kind=region) never animate but feed the walkmask in
+bundle exports. Hidden masks (eye off) are treated as background: they stay plate
+material and are inpainted away like the rest of the scene hole.</p>
+
+<h2 id="catalog">3 · Animation catalog</h2>
+<p>Seven types, all deterministic, all loop-seamless (plan §3). Ranges are
+(min, max, default, step); <code>phase</code> defaults to <i>auto</i> — derived from
+the object's position so crowds don't march in lockstep.</p>
+<table>
+  <tr><th>type</th><th>params</th><th>good for</th></tr>
+  <tr><td><b>sway</b></td><td>speed 1–3, amp 0.5–2, gust 0–0.3, phase</td>
+      <td>foliage: the blob is split into leaf units
+      (erode → cores → multi-source BFS), each unit articulated in 3 chunks with its
+      own waveform + gust noise</td></tr>
+  <tr><td><b>bob</b></td><td>speed 1–3, amp 0–2, circ 0–1, phase</td>
+      <td>floating/breathing objects; per-component offsets, circ bends the path circular</td></tr>
+  <tr><td><b>ripple</b></td><td>speed 1–3, wavelength 6–40, amp 0.5–2</td>
+      <td>water: horizontal run displacement, footprint clipped to the water silhouette</td></tr>
+  <tr><td><b>shimmer</b></td><td>speed 2–4, coverage 0–1</td>
+      <td>specular sparkle: bright/dark pixel selection waves over the object</td></tr>
+  <tr><td><b>flutter</b></td><td>speed 2–4, amp 1–2, phase</td>
+      <td>fast small-amplitude bob for banners, tassels, small leaves</td></tr>
+  <tr><td><b>gustflick</b></td><td>gusts 1–4, strength 1–2, travel 8–40</td>
+      <td>mostly-still object that flicks briefly when a gust passes (event-based,
+      rest frames at t=0 and N−1 keep the seam clean)</td></tr>
+  <tr><td><b>static</b></td><td>—</td><td>no motion; sprite still exported (engine may bob it)</td></tr>
+</table>
+<p>Params are clamped and whitelisted server-side; hostile values fall back to
+defaults (anim falls back to static). Params carry over across type switches when
+names match — intentional, so amp survives sway→bob→sway.</p>
+
+<h2 id="shadow">4 · Shadow sync</h2>
+<p>Toggle <b>shadow</b> per object (inspector). For movers (sway/bob/flutter/gustflick)
+the engine finds the cast shadow hugging the mask — dark pixels
+(<code>val&lt;0.32</code> and blue-ish or desaturated) within 2px of the object that
+no higher object claims — and rides them along with the piece they belong to. The
+shadow's original pixels are inpainted out of the plate, so the moving ring is the
+only shadow visible. Statics (pots, urns) keep their own shadows untouched. The
+first claimer in z order wins a shadow pixel; overlap is never double-painted.</p>
+
+<h2 id="timeline">5 · Timeline &amp; exports</h2>
+<ul>
+  <li><b>N</b> frames (4–96, default 48), <b>fps</b> (2–30, default 12).</li>
+  <li><b>Render</b> builds the frame strip; clicking a strip cell scrubs,
+      <span class="kbd">P</span> plays, <span class="kbd">,</span>/<span class="kbd">.</span> step.</li>
+  <li><b>Export GIF</b>: scale 1–4 (default 2), palette 8–256 colours (default 128).
+      One shared palette + no dither = no inter-frame flicker and tiny LZW output.
+      Target ≤2&nbsp;MB for chat/discord; the server warns above 8&nbsp;MB.</li>
+  <li><b>Export bundle</b>: game-ready zip (§7), always native scale.</li>
+</ul>
+
+<h2 id="projects">6 · Projects &amp; presets</h2>
+<p>Every upload creates a project under <code>app/projects/&lt;pid&gt;/</code>
+(doc.json + native/original PNG + masks/ + out/). The header carries
+<span class="kbd">✎</span> rename, <span class="kbd">⧉</span> duplicate,
+<span class="kbd">🗑</span> delete; the <i>projects…</i> dropdown lists recents.
+Mask edits autosave (debounced).</p>
+<p><b>Param presets</b>: built-ins (gentle, windy, …) plus your own saved per anim
+type — stored in the browser's localStorage, applied to the selected object.</p>
+
+<h2 id="bundle">7 · Game bundle format</h2>
+<pre>bundle.zip
+├── plate.png        native art, objects removed + holes inpainted (RGB)
+├── walkmask.png     white = walkable (derived: ground regions minus object footprints)
+├── palette.png      the shared palette as a 1×N strip
+├── scene.json       everything below, engine-neutral JSON
+├── objects/&lt;id&gt;.png RGBA sprite sheets, grid cols=8, frames in loop order
+├── atlas_0.png …    M5: the same sheets shelf-packed into square pages (pad 1px)
+└── (region masks feed walkmask.png; regions are not objects)</pre>
+<p><code>scene.json</code>: <code>native_w/h, grid, fps, loop_frames</code>;
+per object <code>id, name, label, z, depth, anchor [x,y], bbox,
+sheet {file, frames, cols, cell_w, cell_h, loop}, atlas {page,x,y,w,h},
+clips [{name, anim, params, frames, fps, loop}]</code>. Sprite cells are the render's
+verbatim RGBA (edges cleaned: RGB zeroed under alpha 0), so
+<code>plate + sheets recomposited at anchors == the render frames exactly</code> —
+the importer can trust pixel parity.</p>
+<p><b>Atlas sampling</b>: a sheet lives at <code>atlas {page,x,y,w,h}</code> inside
+<code>atlas_&lt;page&gt;.png</code>; frame <code>t</code> is the cell at
+<code>(x + (t % cols)·cell_w, y + ⌊t / cols⌋·cell_h)</code>. Objects too large for a
+page have no <code>atlas</code> key — fall back to their <code>sheet.file</code>.
+Target engine is a custom web JS engine: plain JSON + PNG is the final format.</p>
+
+<h2 id="api">8 · HTTP API</h2>
+<table>
+  <tr><th>endpoint</th><th>payload → result</th></tr>
+  <tr><td>GET /api/ping</td><td>→ {ok, milestone, engine}</td></tr>
+  <tr><td>POST /api/upload</td><td>raw PNG bytes → {id, w, h, grid, native_w/h}</td></tr>
+  <tr><td>GET /api/projects</td><td>→ [{id, name, w, h, objects, mtime}] (recent last)</td></tr>
+  <tr><td>GET /api/project/&lt;pid&gt;</td><td>→ the project doc</td></tr>
+  <tr><td>POST /api/project/&lt;pid&gt;</td><td>{N, fps, …doc fields} → saved doc</td></tr>
+  <tr><td>POST /api/project/&lt;pid&gt;/meta</td><td>{name} → doc (rename)</td></tr>
+  <tr><td>POST /api/project/&lt;pid&gt;/duplicate</td><td>{} → new doc (copy)</td></tr>
+  <tr><td>POST /api/project/&lt;pid&gt;/delete</td><td>{} → {ok}</td></tr>
+  <tr><td>POST /api/masks</td><td>{pid, ops:[upsert/delete…]} → saved doc (RLE or PNG masks)</td></tr>
+  <tr><td>POST /api/autoseg</td><td>{pid, max_suggestions, cfg, conn} → suggestions (RLE)</td></tr>
+  <tr><td>POST /api/edge</td><td>{pid?, rle, op:grow|shrink|solid|…, n} → {rle, px, bbox}</td></tr>
+  <tr><td>POST /api/render</td><td>{pid, N, fps} → {strip, cols, fw, fh, audit, ms, cached, total_ms}</td></tr>
+  <tr><td>POST /api/gif</td><td>{pid, N, fps, scale, colors} → {url, bytes, audit, warn?}</td></tr>
+  <tr><td>POST /api/bundle</td><td>{pid, N, fps, colors, atlas} → {url, bytes, sheets, atlas_pages, audit}</td></tr>
+  <tr><td>GET /api/out/&lt;pid&gt;/…</td><td>strip.png · preview.gif · bundle.zip (whitelist)</td></tr>
+  <tr><td>GET /api/image/&lt;pid&gt;/…</td><td>native.png · original.png</td></tr>
+  <tr><td>GET /api/mask/&lt;pid&gt;/&lt;id&gt;.png</td><td>one mask, grayscale PNG</td></tr>
+</table>
+<p>Errors come back as <code>{error}</code> with 4xx/5xx; <b>429</b> means
+“busy — retry shortly” (§10). Hostile pids 404 (path traversal is rejected).</p>
+
+<h2 id="engine">9 · Engine rules</h2>
+<ol>
+  <li><b>Native grid only</b> — all motion is integer pixel shifts of source pixels;
+      no interpolation, no sub-pixel anything.</li>
+  <li><b>Loop seam</b> — integer cycles per loop; frame N−1 → 0 is audited like every
+      other step.</li>
+  <li><b>Every unit every frame</b> — sway re-places all leaf units each frame
+      (z-order stable, no popping).</li>
+  <li><b>Plate = art minus objects</b> — holes inpainted (horizontal run fill +
+      inverse-distance blend under long runs); plate is pixel-exact outside masks.</li>
+  <li><b>Audit</b> — motion is only allowed inside per-object allowed zones
+      (bbox + margin, shadow rings included); <code>stray_max</code> must be 0.</li>
+  <li><b>Claim order</b> — an object never owns pixels a higher object covers;
+      shadow rings claim before lower masks.</li>
+  <li><b>Determinism</b> — same doc + masks ⇒ byte-identical renders (seeded per
+      object id).</li>
+  <li><b>Sprite parity</b> — bundle sheets recomposite to the render frames exactly.</li>
+</ol>
+
+<h2 id="perf">10 · Performance &amp; concurrency</h2>
+<ul>
+  <li><b>Budget</b>: 48 frames @ 384×512 renders in &lt;10&nbsp;s worst case
+      (measured ~1.1&nbsp;s on the reference fern scene; a typical 1536×2048
+      courtyard with 56 objects renders in ~1.5&nbsp;s).</li>
+  <li><b>Render cache</b>: keyed by doc + mask mtimes + N/fps + engine version —
+      identical repeat requests answer from memory (<code>cached:true</code>), and a
+      server upgrade can never serve stale frames.</li>
+  <li><b>Concurrency guard</b>: heavy endpoints (render/gif/bundle) take their
+      project's lock first — a double-click or two tabs serialise, and the second
+      request hits the cache — then one of 2 global work slots. When nothing frees up
+      within 90&nbsp;s the answer is <code>429 {error, retry:true}</code> instead of
+      an invisible queue. Auto-seg takes the project lock only.</li>
+  <li><b>Sprite build</b>: pieces blit through cached flat-index tables per integer
+      offset, and frames whose offset pattern repeats are memoised — a frame costs a
+      handful of numpy assignments, not a python loop over runs.</li>
+</ul>
+
+<h2 id="keys">11 · Keyboard shortcuts</h2>
+<table>
+  <tr><th><span class="kbd">B</span> / <span class="kbd">W</span> / <span class="kbd">A</span></th><td>brush / wand / auto-seg</td></tr>
+  <tr><th><span class="kbd">P</span></th><td>play/pause the strip</td></tr>
+  <tr><th><span class="kbd">,</span> / <span class="kbd">.</span></th><td>step frame back / forward</td></tr>
+  <tr><th><span class="kbd">G</span> / <span class="kbd">⇧G</span></th><td>export GIF / export bundle</td></tr>
+  <tr><th><span class="kbd">Delete</span></th><td>delete the selected mask (asks first)</td></tr>
+  <tr><th><span class="kbd">?</span> / <span class="kbd">Esc</span></th><td>help overlay on / off (closes modals too)</td></tr>
+</table>
+
+<h2 id="trouble">12 · Troubleshooting</h2>
+<ul>
+  <li><b>“stray N px” in the audit</b> — something moves outside its allowed zone;
+      usually a mask that clips a moving neighbour. Grow the mover's mask or shrink
+      the neighbour's.</li>
+  <li><b>GIF too big</b> — drop scale to 1, palette to 64, or N to 24–32.</li>
+  <li><b>Object reads as “not moving”</b> — big rigid blob: switch to sway (leaf-unit
+      split) or raise amp; shimmer needs coverage ≥0.3 to sparkle visibly.</li>
+  <li><b>Shadow looks wrong</b> — shadow sync only claims dark pixels hugging the
+      mask; if the cast shadow is far or light, mask it as its own static object.</li>
+  <li><b>429 busy</b> — another render/export for the same project is still running;
+      retry in a few seconds.</li>
+  <li><b>Streaks inside big holes</b> — the vertical-blend inpaint pass reduces hard
+      row steps; for pathological masks, split the object into two masks.</li>
+</ul>
+
+<p class="dim" style="margin-top:40px">Pixel Sway — milestones M1–M5 complete.
+See <code>plan.md</code> and <code>build_log.md</code> in the repo for the full
+ledger, and <code>app/tests/</code> for the machine-verified acceptance suites.</p>
+</main>
+</body>
+</html>

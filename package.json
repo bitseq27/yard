@@ -1,0 +1,12 @@
+{
+  "name": "pixel-sway",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Dev-only manifest: the app itself has ZERO npm deps (single-file frontend, stdlib server). jsdom is only for app/tests/ui_smoke.js; node_modules stays out of the repo.",
+  "scripts": {
+    "test:ui": "node app/tests/ui_smoke.js"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}

@@ -1,0 +1,11 @@
+# runtime / build artifacts
+__pycache__/
+*.pyc
+node_modules/
+# project dirs are runtime data (M1's four seeded examples stay tracked);
+# new ones come and go with uploads and test runs
+app/projects/*/
+!app/projects/2398febe/
+!app/projects/56420a08/
+!app/projects/7c27d18e/
+!app/projects/85b9aa6e/

@@ -1,0 +1,1448 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pixel Sway</title>
+<style>
+  :root { --bg:#101014; --panel:#1b1b22; --panel2:#20202a; --line:#2c2c36; --txt:#d8d8e0;
+          --dim:#8a8a98; --acc:#5ad0a0; --warn:#e0b060; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { height:100%; }
+  body { background:var(--bg); color:var(--txt); font:13px/1.4 ui-monospace,Consolas,monospace;
+         display:flex; flex-direction:column; overflow:hidden; }
+  header, footer { display:flex; align-items:center; gap:8px; padding:7px 10px;
+                   background:var(--panel); border-bottom:1px solid var(--line); flex:0 0 auto; }
+  footer { border-bottom:none; border-top:1px solid var(--line); }
+  .brand { font-weight:700; letter-spacing:.5px; }
+  .badge { background:var(--acc); color:#08110c; border-radius:4px; padding:1px 6px; font-size:11px; }
+  .btn { background:#262630; border:1px solid var(--line); color:var(--txt); border-radius:6px;
+         padding:4px 9px; cursor:pointer; font:inherit; white-space:nowrap; }
+  .btn:hover { background:#30303c; }
+  .btn.on { background:#2f4a3f; border-color:var(--acc); color:#c9f5e2; }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+  .status { color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  main { flex:1 1 auto; display:flex; min-height:0; }
+
+  /* left tool rail */
+  #rail { flex:0 0 52px; background:var(--panel); border-right:1px solid var(--line);
+          display:flex; flex-direction:column; gap:5px; padding:8px 6px; align-items:center; }
+  .tool { width:36px; height:34px; border-radius:6px; border:1px solid var(--line);
+          background:#262630; color:var(--dim); font:inherit; cursor:pointer; font-size:14px; }
+  .tool:hover { background:#30303c; color:var(--txt); }
+  .tool.on { background:#2f4a3f; border-color:var(--acc); color:#c9f5e2; }
+  .railsep { width:100%; height:1px; background:var(--line); margin:3px 0; }
+  .raillbl { color:var(--dim); font-size:10px; writing-mode:horizontal-tb; text-align:center; }
+  #rail input[type=range] { width:38px; writing-mode:vertical-lr; direction:rtl; height:74px; }
+  #rail .v { font-size:10px; color:var(--txt); }
+
+  /* centre stage */
+  #stage { flex:1 1 auto; position:relative; min-width:0; background:#0b0b0e; }
+  #view { position:absolute; inset:0; width:100%; height:100%; display:block;
+          image-rendering:pixelated; cursor:crosshair; }
+  #view.panning { cursor:grabbing; }
+  #hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+          color:var(--dim); pointer-events:none; text-align:center; padding:20px; }
+
+  /* right panel: mask list + inspector */
+  #side { flex:0 0 268px; background:var(--panel); border-left:1px solid var(--line);
+          display:flex; flex-direction:column; min-height:0; }
+  #side h3 { font-size:11px; letter-spacing:.8px; color:var(--dim); text-transform:uppercase;
+             padding:8px 10px 6px; display:flex; gap:6px; align-items:center; }
+  #side h3 .sp { flex:1; }
+  #list { flex:1 1 auto; overflow-y:auto; min-height:60px; border-bottom:1px solid var(--line); }
+  .row { display:flex; align-items:center; gap:6px; padding:4px 8px; cursor:pointer;
+         border-left:3px solid transparent; }
+  .row:hover { background:var(--panel2); }
+  .row.sel { background:#23303a; border-left-color:var(--acc); }
+  .row .chip { width:12px; height:12px; border-radius:3px; border:1px solid #0008; flex:0 0 auto; }
+  .row .nm { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .nm input { width:100%; background:#141419; color:var(--txt); border:1px solid var(--line);
+                   border-radius:4px; font:inherit; padding:1px 4px; }
+  .row .px { color:var(--dim); font-size:10px; flex:0 0 auto; }
+  .row .frag { color:var(--warn); font-size:10px; flex:0 0 auto; }
+  .ib { background:none; border:none; color:var(--dim); cursor:pointer; font:inherit;
+        font-size:11px; padding:1px 3px; border-radius:4px; }
+  .ib:hover { background:#33333f; color:var(--txt); }
+  .row .eye.off { opacity:.35; }
+  #insp { flex:0 0 auto; padding:8px 10px; display:flex; flex-direction:column; gap:6px;
+          max-height:46%; overflow-y:auto; }
+  #insp .grid { display:grid; grid-template-columns:auto 1fr; gap:4px 8px; align-items:center; }
+  #insp label { color:var(--dim); font-size:11px; }
+  #insp input[type=text], #insp select { background:#141419; color:var(--txt);
+        border:1px solid var(--line); border-radius:4px; font:inherit; padding:2px 5px; width:100%; }
+  #insp input[type=color] { width:34px; height:22px; padding:0; border:1px solid var(--line);
+        border-radius:4px; background:none; }
+  #insp .btns { display:flex; gap:4px; flex-wrap:wrap; }
+  #insp .btn { padding:2px 7px; font-size:11px; }
+  #insp .stat { color:var(--dim); font-size:10px; }
+
+  /* timeline / export bar (M3) */
+  #timeline { display:flex; gap:10px; padding:6px 10px; background:var(--panel);
+              border-top:1px solid var(--line); align-items:center; flex:0 0 auto; }
+  #pvw { image-rendering:pixelated; background:#0b0b0e; border:1px solid var(--line);
+         border-radius:4px; height:86px; width:auto; flex:0 0 auto; }
+  .tlcol { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:4px; }
+  .tlrow { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .tlrow label { color:var(--dim); font-size:11px; }
+  .tlrow input[type=number], .tlrow select { background:#141419; color:var(--txt);
+         border:1px solid var(--line); border-radius:4px; font:inherit; padding:2px 4px;
+         width:52px; }
+  #scrub { flex:1 1 120px; min-width:80px; }
+  #tlstat { color:var(--dim); font-size:10px; white-space:nowrap; overflow:hidden;
+            text-overflow:ellipsis; }
+
+  footer .btn { padding:3px 8px; }
+  #zoomLbl { min-width:46px; text-align:center; }
+  #info { margin-left:auto; }
+
+  /* autoseg modal */
+  #modal { position:fixed; inset:0; background:#000a; display:none; z-index:20;
+           align-items:center; justify-content:center; }
+  #modal.on { display:flex; }
+  #mbox { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          width:min(560px, 92vw); max-height:82vh; display:flex; flex-direction:column; }
+  #mbox header { border-radius:10px 10px 0 0; }
+  #mrows { overflow-y:auto; padding:6px; }
+  .srow { display:flex; align-items:center; gap:8px; padding:3px 6px; border-radius:6px; }
+  .srow:hover { background:var(--panel2); }
+  .srow canvas { image-rendering:pixelated; border:1px solid var(--line); border-radius:3px;
+                 background:#0b0b0e; flex:0 0 auto; }
+  .srow .nm { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .srow .kind { color:var(--dim); font-size:10px; }
+  .srow .px { color:var(--dim); font-size:10px; flex:0 0 auto; }
+  #mbox footer { border-radius:0 0 10px 10px; border-top:1px solid var(--line); }
+  .grp { display:flex; align-items:center; gap:6px; padding:6px 8px 2px; color:var(--dim);
+         font-size:10px; letter-spacing:.8px; text-transform:uppercase; position:sticky; top:0;
+         background:var(--panel); }
+  .grp .ib { text-transform:none; letter-spacing:0; }
+  #msettings { display:none; padding:8px 10px; border-bottom:1px solid var(--line);
+               background:var(--panel2); }
+  #msettings.on { display:block; }
+  #msettings .grid { display:grid; grid-template-columns:auto 1fr auto 1fr; gap:5px 8px;
+                     align-items:center; }
+  #msettings label { color:var(--dim); font-size:11px; }
+  #msettings input[type=number], #msettings select { background:#141419; color:var(--txt);
+        border:1px solid var(--line); border-radius:4px; font:inherit; padding:2px 5px; width:100%; }
+  #msettings .btns { display:flex; gap:6px; align-items:center; margin-top:7px; }
+  #msettings .stat { color:var(--dim); font-size:10px; }
+  .srow.peeking { background:#23303a; }
+  .conf { color:var(--warn); }
+
+  /* toasts (M4) */
+  #toasts { position:fixed; right:12px; bottom:12px; display:flex; flex-direction:column;
+            gap:6px; z-index:40; max-width:360px; }
+  .toast { background:#262630; border:1px solid var(--line); border-left:3px solid var(--acc);
+           border-radius:6px; padding:6px 10px; font-size:12px; box-shadow:0 4px 14px #0008;
+           animation: tin .18s ease-out; }
+  .toast.err { border-left-color:#e07070; }
+  .toast.warn { border-left-color:var(--warn); }
+  @keyframes tin { from { transform:translateY(6px); opacity:0; } }
+
+  /* help overlay (M4) */
+  #help { position:fixed; inset:0; background:#000a; display:none; z-index:30;
+          align-items:center; justify-content:center; }
+  #help.on { display:flex; }
+  #helpbox { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+             padding:14px 18px; max-width:440px; font-size:12px; line-height:1.9; }
+  #helpbox h3 { margin-bottom:6px; }
+  #helpbox .k { color:var(--acc); display:inline-block; min-width:86px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Pixel Sway <span class="badge">M5</span></div>
+  <label class="btn">Load image<input type="file" id="file" accept="image/*" hidden></label>
+  <select id="recent" class="btn" title="Recent projects"><option value="">projects…</option></select>
+  <button class="btn" id="prename" title="Rename project">✎</button>
+  <button class="btn" id="pdup" title="Duplicate project">⧉</button>
+  <button class="btn" id="pdel" title="Delete project">🗑</button>
+  <button class="btn" id="autoseg" title="Auto-segment (A)">Auto-seg</button>
+  <button class="btn" id="newmask" title="New mask (N)">+ mask</button>
+  <button class="btn" id="helpbtn" title="Keyboard shortcuts (?)">?</button>
+  <a class="btn" id="docsbtn" href="/docs" target="_blank" rel="noopener" title="Documentation (opens in a new tab)" style="text-decoration:none">📖</a>
+  <div class="status" id="status">Booting…</div>
+</header>
+<main>
+  <aside id="rail">
+    <button class="tool on" data-tool="brush" title="Brush (B)">B</button>
+    <button class="tool" data-tool="eraser" title="Eraser (E)">E</button>
+    <button class="tool" data-tool="rect" title="Rect fill (R)">R</button>
+    <button class="tool" data-tool="lasso" title="Lasso (L)">L</button>
+    <button class="tool" data-tool="wand" title="Magic wand (W)">W</button>
+    <button class="tool" data-tool="pan" title="Pan (H / space / middle-drag)">H</button>
+    <div class="railsep"></div>
+    <div class="raillbl">nib</div>
+    <input type="range" id="nib" min="1" max="16" value="3" title="Brush size ([ ])">
+    <div class="v" id="nibV">3</div>
+    <div class="railsep"></div>
+    <div class="raillbl">tol</div>
+    <input type="range" id="tol" min="0" max="128" value="30" title="Wand tolerance">
+    <div class="v" id="tolV">30</div>
+    <div class="railsep"></div>
+    <button class="btn on" id="mode" title="Add / subtract (Shift inverts while painting)">+ add</button>
+    <button class="btn" id="conn" title="Wand connectivity">8-conn</button>
+    <button class="btn on" id="wmode" title="Wand metric: hue-family (dither-proof) or
+      classic seed-colour tolerance">hue</button>
+    <button class="btn" id="snap" title="Palette-snap first (seed metric only)">snap</button>
+  </aside>
+  <div id="stage">
+    <canvas id="view"></canvas>
+    <div id="hint">No image loaded.<br>Drop a pixel-art PNG here, or click “Load image”.<br>
+      The editor works at the art’s native pixel grid.</div>
+  </div>
+  <aside id="side">
+    <h3>Masks <span id="mcount"></span><span class="sp"></span>
+      <button class="ib" id="dup" title="Duplicate selected (Ctrl+D)">dup</button>
+      <button class="ib" id="del" title="Delete selected">del</button>
+    </h3>
+    <div id="list"></div>
+    <div id="insp"></div>
+  </aside>
+</main>
+<div id="timeline">
+  <canvas id="pvw" width="72" height="96"></canvas>
+  <div class="tlcol">
+    <div class="tlrow">
+      <button class="btn" id="play" title="Play / pause the loop">▶</button>
+      <input type="range" id="scrub" min="0" max="0" value="0" step="1" title="Frame scrub">
+      <span class="stat" id="frlbl">–/–</span>
+      <label>N</label><input type="number" id="tlN" min="4" max="96" step="4" value="48"
+        title="Frames per loop (integer-cycle motion stays seamless at any N)">
+      <label>fps</label><input type="number" id="tlFps" min="2" max="30" value="12">
+    </div>
+    <div class="tlrow">
+      <button class="btn" id="render" title="Render the loop and play it here">Render</button>
+      <label>scale</label><select id="tlScale" title="GIF upscale (NEAREST)">
+        <option>1</option><option selected>2</option><option>3</option><option>4</option></select>
+      <label>colours</label><select id="tlCols" title="Shared palette size">
+        <option>64</option><option selected>128</option><option>192</option><option>256</option></select>
+      <button class="btn" id="exgif" title="Shared-palette GIF, gifsicle -O3">Export GIF</button>
+      <button class="btn" id="exzip" title="Game bundle: plate, walkmask, palette, sheets, scene.json">Export bundle</button>
+      <span class="stat" id="tlstat">set anim types in the inspector, then Render</span>
+    </div>
+  </div>
+</div>
+<footer>
+  <button class="btn" id="zoomOut" title="Zoom out (-)">−</button>
+  <span id="zoomLbl">–</span>
+  <button class="btn" id="zoomIn" title="Zoom in (+)">+</button>
+  <button class="btn" id="fit" title="Fit (0)">Fit</button>
+  <button class="btn" id="one" title="Native 1:1">1:1</button>
+  <button class="btn" id="two" title="Native ×2">×2</button>
+  <span class="status" id="save"></span>
+  <span class="status" id="info"></span>
+</footer>
+
+<div id="modal">
+  <div id="mbox">
+    <header><div class="brand">Auto-segment — recognised objects</div>
+      <button class="btn" id="mset" title="Auto-seg settings">settings</button>
+      <div class="status" id="mstat"></div></header>
+    <div id="msettings">
+      <div class="grid">
+        <label>max suggestions</label><input type="number" id="asCap" min="10" max="200" step="5">
+        <label>min object px</label><input type="number" id="asMin" min="4" max="500" step="5">
+        <label>merge distance</label><input type="number" id="asMerge" min="0" max="6">
+        <label>absorb gap</label><input type="number" id="asAbsorb" min="0" max="40">
+        <label>silhouette growth</label><input type="number" id="asGrow" min="0" max="4">
+        <label>connectivity</label><select id="asConn"><option value="8">8-conn</option>
+          <option value="4">4-conn</option></select>
+        <label>offer regions too</label><input type="checkbox" id="asRegions">
+        <label>auto-run on load</label><input type="checkbox" id="asOnload">
+        <label>recognise objects</label><input type="checkbox" id="asRecog">
+        <label></label><span class="stat">naming: recognised label vs material class</span>
+      </div>
+      <div class="btns"><button class="btn" id="asReset">reset defaults</button>
+        <span class="stat">these map 1:1 onto the engine cfg; tick = import, click a row =
+        preview it on the canvas</span></div>
+    </div>
+    <div id="mrows"></div>
+    <footer>
+      <button class="btn" id="mrerun" title="Re-run with these settings">re-run</button>
+      <button class="btn" id="mobjs">tick objects</button>
+      <button class="btn" id="mnone">untick all</button>
+      <span class="sp" style="flex:1"></span>
+      <span class="status" id="msel"></span>
+      <button class="btn" id="mimport">Import selected</button>
+      <button class="btn" id="mcancel">Cancel</button>
+    </footer>
+  </div>
+</div>
+
+<div id="help">
+  <div id="helpbox">
+    <h3>Keyboard shortcuts</h3>
+    <div><span class="k">B E R L W H</span> brush · eraser · rect · lasso · wand · pan</div>
+    <div><span class="k">N / A</span> new mask · auto-seg</div>
+    <div><span class="k">[ ]</span> nib smaller / bigger &nbsp; <span class="k">+ − 0 1 2</span> zoom</div>
+    <div><span class="k">Ctrl+Z / ⇧Z</span> undo / redo &nbsp; <span class="k">Ctrl+D</span> duplicate mask</div>
+    <div><span class="k">Ctrl+S</span> save now &nbsp; <span class="k">Delete</span> delete mask</div>
+    <div><span class="k">P</span> play / pause loop &nbsp; <span class="k">, .</span> step frame</div>
+    <div><span class="k">G / ⇧G</span> export GIF / export game bundle</div>
+    <div><span class="k">Shift</span> invert add/subtract while painting</div>
+    <div><span class="k">Esc / ?</span> close dialogs / this help</div>
+    <div style="margin-top:8px"><button class="btn" id="helpclose">close</button></div>
+  </div>
+</div>
+<div id="toasts"></div>
+
+<script>
+'use strict';
+/* ========================================================================= *
+ *  Pixel Sway — M2 editor (masking). Single file, no CDN deps (plan §1/§5).
+ *  All pixel work happens at native resolution; masks are Uint8Arrays plus a
+ *  tinted RGBA canvas each. The server owns persistence + wand/auto-seg.
+ * ========================================================================= */
+const $ = id => document.getElementById(id);
+const stage = $('stage'), canvas = $('view'), ctx = canvas.getContext('2d');
+const hint = $('hint'), statusEl = $('status'), infoEl = $('info'), saveEl = $('save');
+const listEl = $('list'), inspEl = $('insp'), mcountEl = $('mcount');
+
+const S = {
+  meta: null, img: null, W: 0, H: 0,
+  masks: [],            // z order == array order
+  sel: -1,
+  tool: 'brush', nib: 3, tol: 30, conn: 8, snap: false, wmode: 'hue', add: true,
+  zoom: 2, ox: 0, oy: 0, dpr: 1,
+  dirty: new Set(), docDirty: false,
+  undo: [], redo: [],
+};
+const HAVE_SERVER = location.protocol === 'http:' || location.protocol === 'https:';
+const overlay = document.createElement('canvas');
+const octx = overlay.getContext('2d');
+
+function setStatus(t) { statusEl.textContent = t; }
+function rgbCss(c) { return `rgb(${c[0]},${c[1]},${c[2]})`; }
+function hexCss(c) { return '#' + c.map(v => v.toString(16).padStart(2, '0')).join(''); }
+function cssHex(h) {
+  const m = h.replace('#', '');
+  return [parseInt(m.slice(0, 2), 16), parseInt(m.slice(2, 4), 16), parseInt(m.slice(4, 6), 16)];
+}
+function nextColor(i) {
+  const h = (i * 0.61803398875) % 1;
+  const sv = [[0.85, 0.95], [0.55, 0.9], [0.9, 0.55], [0.7, 0.75]][i % 4];
+  const f = (p, q, t) => {
+    t = ((t % 1) + 1) % 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const [s, v] = sv, q = v < 0.5 ? v * (1 + s) : v + s - v * s, p = 2 * v - q;
+  return [f(p, q, h + 1 / 3), f(p, q, h), f(p, q, h - 1 / 3)].map(x => Math.round(x * 255));
+}
+
+/* ------------------------------------------------------- boot / server guard */
+function backendWarning() {
+  hint.style.display = 'flex';
+  hint.innerHTML = 'No server context.<br>This editor must run through the live preview ' +
+    '(“Pixel Sway editor”, port 8000),<br>not from the static file viewer.';
+  setStatus('Backend unreachable — open the app via the live preview, not the file viewer.');
+}
+if (HAVE_SERVER) {
+  fetch('/api/ping').then(r => r.json()).then(j => {
+    if (!j.ok) throw 0;
+    setStatus(`Backend ${j.milestone}. Drop a pixel-art PNG here, or click “Load image”.`);
+    refreshRecent();
+  }).catch(() => backendWarning());
+} else backendWarning();
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? undefined : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const msg = (await res.json().catch(() => ({}))).error || res.status;
+    toast(`${path}: ${msg}`, 'err');
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+/* M4: error/warn toasts — every failed API call lands here, status line keeps detail */
+function toast(msg, kind) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (kind ? ' ' + kind : '');
+  el.textContent = msg;
+  $('toasts').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; },
+    kind === 'err' ? 7000 : 3500);
+  setTimeout(() => el.remove(), kind === 'err' ? 7400 : 3900);
+  while ($('toasts').children.length > 5) $('toasts').firstChild.remove();
+  return el;
+}
+
+/* ------------------------------------------------------------- RLE wire codec */
+function encodeRLE(d) {
+  const out = [], W = S.W;
+  for (let y = 0; y < S.H; y++) {
+    let x = 0;
+    while (x < W) {
+      if (d[y * W + x]) {
+        const x0 = x;
+        while (x + 1 < W && d[y * W + x + 1]) x++;
+        out.push(y, x0, x);
+      }
+      x++;
+    }
+  }
+  return out;
+}
+function decodeRLE(rle) {
+  const d = new Uint8Array(S.W * S.H);
+  for (let i = 0; i + 2 < rle.length; i += 3) {
+    const y = rle[i], a = rle[i + 1], b = rle[i + 2];
+    d.fill(1, y * S.W + a, y * S.W + b + 1);
+  }
+  return d;
+}
+
+/* ------------------------------------------------------------------ masks */
+function maskStats(m) {
+  let px = 0, x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1, sy = 0;
+  const ys = [];
+  for (let y = 0; y < S.H; y++) {
+    for (let x = 0; x < S.W; x++) if (m.data[y * S.W + x]) {
+      px++; sy += y; ys.push(y);
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+  }
+  if (!px) return { px: 0, bbox: null, depth: 0 };
+  ys.sort((a, b) => a - b);
+  const base = ys[Math.floor(ys.length * 0.97)];
+  return { px, bbox: [x0, y0, x1, y1], depth: +(3 * base - sy / px).toFixed(1) };
+}
+function makeMask(opts) {
+  const m = Object.assign({
+    id: null, name: 'mask', kind: 'object', color: nextColor(S.masks.length),
+    label: '', conf: 0, anim: 'static', anim_hint: '', params: {},
+    visible: true, data: new Uint8Array(S.W * S.H), nfrag: 1, px: 0, bbox: null, depth: 0,
+  }, opts);
+  m.canvas = document.createElement('canvas');
+  m.canvas.width = S.W; m.canvas.height = S.H;
+  m.ctx = m.canvas.getContext('2d');
+  m.img = m.ctx.createImageData(S.W, S.H);
+  retint(m);
+  return m;
+}
+function retint(m) {           // rebuild the tinted RGBA canvas from data (full pass)
+  const px = m.img.data, [r, g, b] = m.color;
+  for (let i = 0, n = S.W * S.H; i < n; i++) {
+    const o = i * 4, on = m.data[i] ? 255 : 0;
+    px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = on;
+  }
+  m.ctx.putImageData(m.img, 0, 0);
+  const st = maskStats(m);
+  m.px = st.px; m.bbox = st.bbox; m.depth = st.depth;
+}
+function touchPixels(m, list) {  // incremental repaint after a brush stroke
+  const px = m.img.data, [r, g, b] = m.color;
+  for (const i of list) {
+    const o = i * 4, on = m.data[i] ? 255 : 0;
+    px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = on;
+  }
+  m.ctx.putImageData(m.img, 0, 0);
+}
+function rebuildOverlay() {
+  octx.clearRect(0, 0, S.W, S.H);
+  for (const m of S.masks) {
+    if (!m.visible) continue;
+    octx.globalAlpha = (S.masks[S.sel] === m) ? 0.62 : 0.36;
+    octx.drawImage(m.canvas, 0, 0);
+  }
+  octx.globalAlpha = 1;
+  const sel = S.masks[S.sel];
+  if (sel && sel.visible) drawRim(sel);
+}
+function drawRim(m) {          // 1px white rim on the selection (native res)
+  const W = S.W, H = S.H, d = m.data;
+  octx.fillStyle = '#ffffff';
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    if (!d[i]) continue;
+    if (!(x && d[i - 1]) || !(x < W - 1 && d[i + 1]) ||
+        !(y && d[i - W]) || !(y < H - 1 && d[i + W])) octx.fillRect(x, y, 1, 1);
+  }
+}
+function markDirty(m) { S.dirty.add(m); scheduleSave(); }
+function selMask() { return S.masks[S.sel] || null; }
+
+/* ------------------------------------------------------------------ view */
+function resize() {
+  S.dpr = window.devicePixelRatio || 1;
+  const r = stage.getBoundingClientRect();
+  canvas.width = Math.max(1, Math.round(r.width * S.dpr));
+  canvas.height = Math.max(1, Math.round(r.height * S.dpr));
+  draw();
+}
+let preview = null;            // live rect/lasso preview in native coords
+function draw() {
+  ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = '#0b0b0e';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!S.img) return;
+  const w = S.W * S.zoom, h = S.H * S.zoom;
+  ctx.drawImage(S.img, S.ox, S.oy, w, h);
+  ctx.drawImage(overlay, S.ox, S.oy, w, h);
+  if (S.sgPreview != null && sgCache[S.sgPreview]) {   // auto-seg row preview
+    ctx.globalAlpha = 0.5;
+    ctx.drawImage(sgPreviewCanvas(S.sgPreview), S.ox, S.oy, w, h);
+    ctx.globalAlpha = 1;
+  }
+  // live previews
+  ctx.lineWidth = 1;
+  if (preview && preview.kind === 'rect') {
+    ctx.strokeStyle = '#fff';
+    ctx.strokeRect(S.ox + preview.x0 * S.zoom + .5, S.oy + preview.y0 * S.zoom + .5,
+                   (preview.x1 - preview.x0 + 1) * S.zoom - 1, (preview.y1 - preview.y0 + 1) * S.zoom - 1);
+  } else if (preview && preview.kind === 'lasso') {
+    ctx.strokeStyle = '#fff'; ctx.beginPath();
+    preview.pts.forEach((p, i) => {
+      const x = S.ox + (p[0] + .5) * S.zoom, y = S.oy + (p[1] + .5) * S.zoom;
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.closePath(); ctx.stroke();
+  }
+  // brush cursor
+  if (cur && (S.tool === 'brush' || S.tool === 'eraser')) {
+    const s = S.nib, x0 = cur.x - ((s - 1) >> 1);
+    ctx.strokeStyle = S.tool === 'eraser' ? '#ff8080' : '#ffffff';
+    ctx.strokeRect(S.ox + x0 * S.zoom + .5, S.oy + (cur.y - ((s - 1) >> 1)) * S.zoom + .5,
+                   s * S.zoom - 1, s * S.zoom - 1);
+  }
+}
+function updZoom() { $('zoomLbl').textContent = '×' + (Math.round(S.zoom * 100) / 100); }
+function setZoom(z, cx, cy) {
+  const r = stage.getBoundingClientRect();
+  if (cx === undefined) { cx = r.width / 2; cy = r.height / 2; }
+  const nz = Math.min(32, Math.max(0.25, z)), k = nz / S.zoom;
+  S.ox = cx - (cx - S.ox) * k; S.oy = cy - (cy - S.oy) * k; S.zoom = nz;
+  updZoom(); draw();
+}
+function centerZoom(z) {
+  const r = stage.getBoundingClientRect();
+  S.zoom = 1; S.ox = 0; S.oy = 0;
+  setZoom(z, r.width / 2, r.height / 2);
+}
+function fit() {
+  if (!S.img) return;
+  const r = stage.getBoundingClientRect();
+  S.zoom = 1; S.ox = 0; S.oy = 0;
+  setZoom(Math.min(r.width / S.W, r.height / S.H) * 0.92, r.width / 2, r.height / 2);
+  const r2 = stage.getBoundingClientRect();
+  S.ox = (r2.width - S.W * S.zoom) / 2; S.oy = (r2.height - S.H * S.zoom) / 2;
+  draw();
+}
+function toNative(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: Math.floor((e.clientX - r.left - S.ox) / S.zoom),
+           y: Math.floor((e.clientY - r.top - S.oy) / S.zoom) };
+}
+
+/* ------------------------------------------------------------------ painting */
+let cur = null, stroke = null;
+function inb(x, y) { return x >= 0 && y >= 0 && x < S.W && y < S.H; }
+function stamp(m, x, y, s, val, touched) {
+  const x0 = x - ((s - 1) >> 1), y0 = y - ((s - 1) >> 1);
+  for (let yy = y0; yy < y0 + s; yy++) for (let xx = x0; xx < x0 + s; xx++) {
+    if (!inb(xx, yy)) continue;
+    const i = yy * S.W + xx;
+    if (m.data[i] !== val) { m.data[i] = val; touched.push(i); }
+  }
+}
+function lineStamp(m, a, b, s, val, touched) {
+  const dx = Math.abs(b.x - a.x), dy = Math.abs(b.y - a.y);
+  const n = Math.max(dx, dy, 1);
+  for (let i = 0; i <= n; i++)
+    stamp(m, Math.round(a.x + (b.x - a.x) * i / n), Math.round(a.y + (b.y - a.y) * i / n),
+          s, val, touched);
+}
+function pushUndo(m) {
+  S.undo.push({ m, data: m.data.slice() });
+  if (S.undo.length > 30) S.undo.shift();
+  S.redo.length = 0;
+}
+function applyBool(m, maskArr, add) {     // maskArr: Uint8Array region from server/rect/lasso
+  pushUndo(m);
+  let changed = 0;
+  for (let i = 0; i < m.data.length; i++) {
+    const v = add ? (m.data[i] | maskArr[i]) : (m.data[i] & ~maskArr[i]);
+    if (v !== m.data[i]) { m.data[i] = v; changed++; }
+  }
+  retint(m); rebuildOverlay(); renderList(); markDirty(m); draw();
+  return changed;
+}
+function fillRectMask(x0, y0, x1, y1) {
+  const a = Math.min(x0, x1), b = Math.max(x0, x1), c = Math.min(y0, y1), d = Math.max(y0, y1);
+  const out = new Uint8Array(S.W * S.H);
+  for (let y = Math.max(0, c); y <= Math.min(S.H - 1, d); y++)
+    for (let x = Math.max(0, a); x <= Math.min(S.W - 1, b); x++) out[y * S.W + x] = 1;
+  return out;
+}
+function fillPolyMask(pts) {               // even-odd scanline fill on the native grid
+  const out = new Uint8Array(S.W * S.H);
+  if (pts.length < 3) return out;
+  let y0 = 1e9, y1 = -1;
+  for (const p of pts) { y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }
+  for (let y = Math.max(0, Math.floor(y0)); y <= Math.min(S.H - 1, Math.ceil(y1)); y++) {
+    const xs = [];
+    for (let i = 0; i < pts.length; i++) {
+      const [ax, ay] = pts[i], [bx, by] = pts[(i + 1) % pts.length];
+      if ((ay <= y + .5 && by > y + .5) || (by <= y + .5 && ay > y + .5))
+        xs.push(ax + (y + .5 - ay) / (by - ay) * (bx - ax));
+    }
+    xs.sort((p, q) => p - q);
+    for (let i = 0; i + 1 < xs.length; i += 2)
+      for (let x = Math.max(0, Math.ceil(xs[i] - .5)); x <= Math.min(S.W - 1, Math.floor(xs[i + 1] - .5)); x++)
+        out[y * S.W + x] = 1;
+  }
+  return out;
+}
+
+canvas.addEventListener('pointerdown', e => {
+  if (!S.img) return;
+  canvas.setPointerCapture(e.pointerId);
+  const p = toNative(e);
+  const pan = S.tool === 'pan' || e.button === 1 || spaceDown;
+  if (pan) { stroke = { kind: 'pan', x: e.clientX, y: e.clientY }; canvas.classList.add('panning'); return; }
+  if (e.button !== 0) return;
+  const add = S.add !== e.shiftKey;                 // Shift inverts add/subtract
+  let m = selMask();
+  if (!m && S.tool !== 'pan') { m = makeMask({ name: `mask ${S.masks.length + 1}` }); S.masks.push(m); S.sel = S.masks.length - 1; renderList(); }
+  if (S.tool === 'brush' || S.tool === 'eraser') {
+    const val = (S.tool === 'brush') === add ? 1 : 0;
+    pushUndo(m);
+    stroke = { kind: 'paint', m, last: p, val, touched: [] };
+    lineStamp(m, p, p, S.nib, val, stroke.touched);
+    touchPixels(m, stroke.touched); rebuildOverlay(); draw();
+  } else if (S.tool === 'rect') {
+    stroke = { kind: 'rect', m, a: p, add };
+    preview = { kind: 'rect', x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+    draw();
+  } else if (S.tool === 'lasso') {
+    stroke = { kind: 'lasso', m, pts: [[p.x, p.y]], add };
+    preview = { kind: 'lasso', pts: stroke.pts };
+    draw();
+  } else if (S.tool === 'wand') {
+    doWand(p, add, m);
+  }
+});
+canvas.addEventListener('pointermove', e => {
+  cur = S.img ? toNative(e) : null;
+  if (!stroke) { draw(); return; }
+  if (stroke.kind === 'pan') {
+    S.ox += e.clientX - stroke.x; S.oy += e.clientY - stroke.y;
+    stroke.x = e.clientX; stroke.y = e.clientY; draw(); return;
+  }
+  const p = toNative(e);
+  if (stroke.kind === 'paint') {
+    lineStamp(stroke.m, stroke.last, p, S.nib, stroke.val, stroke.touched);
+    stroke.last = p;
+    touchPixels(stroke.m, stroke.touched); rebuildOverlay(); draw();
+  } else if (stroke.kind === 'rect') {
+    preview.x1 = p.x; preview.y1 = p.y; draw();
+  } else if (stroke.kind === 'lasso') {
+    const last = stroke.pts[stroke.pts.length - 1];
+    if (last[0] !== p.x || last[1] !== p.y) { stroke.pts.push([p.x, p.y]); preview.pts = stroke.pts; }
+    draw();
+  }
+});
+canvas.addEventListener('pointerup', e => {
+  canvas.classList.remove('panning');
+  if (!stroke) return;
+  const st = stroke; stroke = null; preview = null;
+  if (st.kind === 'paint') {
+    const m = st.m;
+    const s = maskStats(m); m.px = s.px; m.bbox = s.bbox; m.depth = s.depth;
+    renderList(); markDirty(m); draw(); return;
+  }
+  if (st.kind === 'rect') {
+    const p = toNative(e);
+    applyBool(st.m, fillRectMask(st.a.x, st.a.y, p.x, p.y), st.add);
+    setStatus(`rect ${st.add ? 'added to' : 'removed from'} ${st.m.name}`);
+    return;
+  }
+  if (st.kind === 'lasso') {
+    applyBool(st.m, fillPolyMask(st.pts), st.add);
+    setStatus(`lasso ${st.add ? 'added to' : 'removed from'} ${st.m.name}`);
+  }
+});
+stage.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = stage.getBoundingClientRect();
+  setZoom(S.zoom * (e.deltaY < 0 ? 1.25 : 1 / 1.25), e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
+
+/* ------------------------------------------------------------------ wand */
+async function doWand(p, add, m) {
+  if (!inb(p.x, p.y)) return;
+  setStatus(`wand at ${p.x},${p.y} tol ${S.tol}…`);
+  try {
+    const r = await api('/api/wand', { pid: S.meta.id, x: p.x, y: p.y, tol: S.tol,
+                                      conn: S.conn, mode: S.wmode,
+                                      snap: S.wmode === 'seed' && S.snap ? 48 : 0,
+                                      smooth: true });
+    if (!r.px) { setStatus('wand grabbed nothing — raise tolerance'); return; }
+    const n = applyBool(m, decodeRLE(r.rle), add);
+    setStatus(`wand: ${r.px}px region, ${n}px ${add ? 'added' : 'removed'} on ${m.name}`);
+  } catch (err) { setStatus('wand failed: ' + err.message); }
+}
+
+/* ------------------------------------------------------------------ persistence */
+let saveTimer = null;
+function scheduleSave() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(flushSave, 700);
+}
+async function flushSave() {
+  if (!S.meta || (!S.dirty.size && !S.docDirty)) return;
+  const ops = [];
+  for (const m of S.dirty) {
+    ops.push({ op: 'upsert', id: m.id, name: m.name, kind: m.kind, color: m.color,
+               z: S.masks.indexOf(m), visible: m.visible, nfrag: m.nfrag,
+               label: m.label, conf: m.conf, anim: m.anim, params: m.params || {},
+               anim_hint: m.anim_hint || '', shadow: !!m.shadow,
+               rle: encodeRLE(m.data) });
+  }
+  const deleting = S.pendingDeletes || [];
+  for (const id of deleting) ops.push({ op: 'delete', id });
+  S.pendingDeletes = [];
+  try {
+    const r = await api('/api/masks', { pid: S.meta.id, ops });
+    for (const m of S.dirty) if (!m.id) {           // server assigned ids for new masks
+      const got = r.objects.find(o => o.name === m.name && !m.id);
+      if (got) m.id = got.id;
+    }
+    S.dirty.clear(); S.docDirty = false;
+    saveEl.textContent = 'saved ' + new Date().toLocaleTimeString();
+  } catch (err) {
+    saveEl.textContent = 'SAVE FAILED: ' + err.message;
+  }
+}
+async function upload(file) {
+  if (!HAVE_SERVER) { backendWarning(); return; }
+  setStatus('Uploading ' + file.name + ' …');
+  try {
+    const buf = await file.arrayBuffer();
+    const res = await fetch('/api/upload', { method: 'POST',
+      headers: { 'Content-Type': 'image/png' }, body: buf });
+    if (!res.ok) throw new Error((await res.json()).error || res.status);
+    await openProject((await res.json()).id);
+  } catch (err) {
+    setStatus('Upload failed: ' + err.message);
+  }
+}
+let OPEN_EPOCH = 0;   // bumped by resetEditor/openProject: aborts stale loads (M5)
+async function openProject(pid) {
+  const ep = ++OPEN_EPOCH;
+  const meta = await api('/api/project/' + pid);
+  if (ep !== OPEN_EPOCH) return;
+  S.meta = meta; S.W = meta.native_w; S.H = meta.native_h;
+  $('tlN').value = meta.N || 48; $('tlFps').value = meta.fps || 12;
+  S.masks = []; S.sel = -1; S.undo = []; S.redo = []; S.dirty.clear();
+  overlay.width = S.W; overlay.height = S.H;
+  const nb = await (await fetch('/api/image/' + pid + '/native.png')).blob();
+  S.img = await createImageBitmap(nb);
+  if (ep !== OPEN_EPOCH) return;
+  for (const o of meta.objects || []) {
+    const m = makeMask({ id: o.id, name: o.name, kind: o.kind || 'object',
+                         color: o.color || nextColor(S.masks.length), visible: o.visible !== false,
+                         nfrag: o.nfrag || 1, label: o.label || o.name, conf: o.conf || 0,
+                         anim: o.anim || 'static', params: o.params || {},
+                         anim_hint: o.anim_hint || '', shadow: !!o.shadow });
+    try {
+      const mb = await (await fetch(`/api/mask/${pid}/${o.id}.png`)).blob();
+      const bmp = await createImageBitmap(mb);
+      const c = document.createElement('canvas');
+      c.width = bmp.width; c.height = bmp.height;
+      c.getContext('2d').drawImage(bmp, 0, 0);
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      for (let i = 0; i < S.W * S.H; i++) m.data[i] = d[i * 4 + 3] > 127 ? 1 : 0;
+    } catch (e) { /* mask file missing: keep it empty */ }
+    if (ep !== OPEN_EPOCH) return;
+    retint(m);
+    S.masks.push(m);
+  }
+  if (ep !== OPEN_EPOCH) return;
+  hint.style.display = 'none';
+  fit();
+  renderList();
+  infoEl.textContent = `${meta.w}×${meta.h} → grid ${meta.grid} → native ${S.W}×${S.H}` +
+    `  •  ${S.masks.length} masks`;
+  setStatus(`Project ${meta.name ? meta.name + ' (' + pid + ')' : pid} ready.` +
+    ' B brush, W wand, A auto-seg, P play, G export GIF, ? help.');
+  if (!S.masks.length && S.asg && S.asg.onload) runAutoseg(true);   // parse + present the list
+  history.replaceState(null, '', '?p=' + pid);
+  refreshRecent();
+}
+function refreshRecent() {
+  api('/api/projects').then(list => {
+    const sel = $('recent');
+    sel.innerHTML = '<option value="">projects…</option>';
+    for (const p of list.slice(-12).reverse()) {
+      const o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = `${p.name ? p.name + ' (' + p.id + ')' : p.id}  ${p.objects} masks`;
+      sel.appendChild(o);
+    }
+  }).catch(() => {});
+}
+
+/* M4: project management — rename / duplicate / delete */
+$('prename').onclick = async () => {
+  if (!S.meta) { setStatus('load an image first'); return; }
+  const name = prompt('project name', S.meta.name || S.meta.id);
+  if (!name || !name.trim()) return;
+  try {
+    S.meta = await api('/api/project/' + S.meta.id + '/meta', { name: name.trim() });
+    refreshRecent();
+    toast(`project renamed to "${name.trim()}"`);
+  } catch (err) { setStatus('rename failed: ' + err.message); }
+};
+$('pdup').onclick = async () => {
+  if (!S.meta) { setStatus('load an image first'); return; }
+  await flushSave();
+  try {
+    const doc = await api('/api/project/' + S.meta.id + '/duplicate', {});
+    toast('duplicated as ' + (doc.name || doc.id));
+    refreshRecent();
+    openProject(doc.id);
+  } catch (err) { setStatus('duplicate failed: ' + err.message); }
+};
+$('pdel').onclick = async () => {
+  if (!S.meta) { setStatus('load an image first'); return; }
+  const victim = S.meta.id;
+  if (!confirm(`delete project ${S.meta.name || victim} and its ${S.masks.length} masks?`)) return;
+  try {
+    await api('/api/project/' + victim + '/delete', {});
+    toast('project ' + victim + ' deleted', 'warn');
+    refreshRecent();
+    if (victim === S.meta.id) resetEditor();
+  } catch (err) { setStatus('delete failed: ' + err.message); }
+};
+function resetEditor() {
+  OPEN_EPOCH++;   // cancel any in-flight openProject (M5 race fix)
+  S.meta = null; S.img = null; S.masks = []; S.sel = -1;
+  S.undo = []; S.redo = []; S.dirty.clear();
+  overlay.width = 1; overlay.height = 1;
+  hint.style.display = 'flex';
+  hint.innerHTML = 'No image loaded.<br>Drop a pixel-art PNG here, or click “Load image”.<br>' +
+    'The editor works at the art’s native pixel grid.';
+  infoEl.textContent = '';
+  renderList(); draw();
+  pvPlay(false); PV.strip = null; PV.N = 0;
+  $('frlbl').textContent = '–/–'; $('scrub').max = 0; $('scrub').value = 0;
+  $('tlstat').textContent = 'set anim types in the inspector, then Render';
+  history.replaceState(null, '', location.pathname);
+}
+$('helpbtn').onclick = () => $('help').classList.toggle('on');
+$('helpclose').onclick = () => $('help').classList.remove('on');
+
+/* ------------------------------------------------------------------ mask list UI */
+function renderList() {
+  mcountEl.textContent = S.masks.length ? `(${S.masks.length})` : '';
+  listEl.innerHTML = '';
+  S.masks.forEach((m, i) => {
+    const row = document.createElement('div');
+    row.className = 'row' + (i === S.sel ? ' sel' : '');
+    row.innerHTML =
+      `<span class="chip" style="background:${rgbCss(m.color)}"></span>` +
+      `<span class="nm" title="${m.name}">${m.name}</span>` +
+      (m.nfrag > 1 ? `<span class="frag" title="${m.nfrag} fragments — split with the eraser if needed">×${m.nfrag}</span>` : '') +
+      `<span class="px">${m.px}</span>` +
+      `<button class="ib eye ${m.visible ? '' : 'off'}" title="visibility">◉</button>` +
+      `<button class="ib up" title="raise (z)">↑</button>` +
+      `<button class="ib dn" title="lower (z)">↓</button>`;
+    row.onclick = ev => {
+      const t = ev.target;
+      if (t.classList.contains('eye')) { m.visible = !m.visible; rebuildOverlay(); renderList(); markDirty(m); return; }
+      if (t.classList.contains('up') || t.classList.contains('dn')) {
+        const j = i + (t.classList.contains('up') ? -1 : 1);
+        if (j < 0 || j >= S.masks.length) return;
+        [S.masks[i], S.masks[j]] = [S.masks[j], S.masks[i]];
+        S.sel = j; rebuildOverlay(); renderList(); markDirty(m); markDirty(S.masks[j]); return;
+      }
+      S.sel = i; rebuildOverlay(); renderList(); renderInsp(); draw();
+    };
+    row.querySelector('.nm').ondblclick = () => {
+      const inp = document.createElement('input');
+      inp.value = m.name;
+      const nm = row.querySelector('.nm');
+      nm.innerHTML = ''; nm.appendChild(inp); inp.focus(); inp.select();
+      const done = () => { m.name = inp.value.trim() || m.name; renderList(); renderInsp(); markDirty(m); };
+      inp.onblur = done;
+      inp.onkeydown = ev => { if (ev.key === 'Enter') inp.blur(); ev.stopPropagation(); };
+    };
+    listEl.appendChild(row);
+  });
+  renderInsp();
+}
+/* M3: the plan §3 catalog mirrored client-side (server clamps again, defence in depth) */
+const ANIM_DEFS = {
+  sway:      { speed: [1, 3, 1, 1], amp: [0.5, 2, 1, 0.1], gust: [0, 0.3, 0.15, 0.01], phase: [0, 0.99, null, 0.01] },
+  bob:       { speed: [1, 3, 1, 1], amp: [0, 2, 1, 0.1], circ: [0, 1, 0.6, 0.05], phase: [0, 0.99, null, 0.01] },
+  ripple:    { speed: [1, 3, 3, 1], wavelength: [6, 40, 14, 1], amp: [0.5, 2, 1, 0.1] },
+  shimmer:   { speed: [2, 4, 3, 1], coverage: [0, 1, 0.5, 0.05] },
+  flutter:   { speed: [2, 4, 3, 1], amp: [1, 2, 1, 0.5] },
+  gustflick: { gusts: [1, 4, 3, 1], strength: [1, 2, 1, 1], travel: [8, 40, 20, 1] },
+  static:    {},
+};
+const ANIM_TYPES = Object.keys(ANIM_DEFS);
+function animFromHint(h) {
+  h = (h || '').toLowerCase();
+  for (const k of ['ripple', 'sway', 'bob', 'gustflick', 'flutter', 'shimmer', 'static'])
+    if (h.includes(k)) return k;
+  return 'static';
+}
+function animParams(m) {
+  const defs = ANIM_DEFS[m.anim] || {};
+  const out = {};
+  for (const [k, d] of Object.entries(defs)) {
+    const v = (m.params && m.params[k] !== undefined) ? m.params[k] : d[2];
+    out[k] = (k === 'phase' && (v === null || v === undefined)) ? null
+      : Math.min(d[1], Math.max(d[0], +v || 0));
+  }
+  return out;
+}
+function renderInsp() {
+  const m = selMask();
+  if (!m) {
+    inspEl.innerHTML = `<div class="stat">No mask selected.<br>Paint with B, or Auto-seg (A)
+      for editable suggestions.<br>Shift inverts add/subtract.</div>`;
+    return;
+  }
+  const types = ANIM_TYPES.map(t =>
+    `<option value="${t}"${m.anim === t ? ' selected' : ''}>${t}</option>`).join('');
+  inspEl.innerHTML = `
+    <div class="grid">
+      <label>name</label><input type="text" id="iName" value="${m.name.replace(/"/g, '&quot;')}">
+      <label>kind</label><select id="iKind">
+        <option value="object"${m.kind === 'object' ? ' selected' : ''}>object</option>
+        <option value="region"${m.kind === 'region' ? ' selected' : ''}>region</option>
+      </select>
+      <label>colour</label><input type="color" id="iCol" value="${hexCss(m.color)}">
+      <label>anim</label><select id="iAnim" title="animation type (plan §3 catalog)">${types}</select>
+      <label>preset</label><span style="display:flex;gap:4px;align-items:center">
+        <select id="iPreset" style="flex:1" title="param presets for this anim type"></select>
+        <button class="btn" id="iPresetSave" title="save current params as preset"
+          style="padding:1px 6px">+</button></span>
+      <label>shadow</label><span style="display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="iShadow" title="shadow sync: dark pixels hugging the
+          mask move with it; pots & statics keep theirs (plan §3)">
+        <span class="stat">sync cast shadow</span></span>
+    </div>
+    <div class="grid" id="iParams"></div>
+    <div class="btns">
+      <button class="btn" data-edge="grow">grow 1px</button>
+      <button class="btn" data-edge="shrink">shrink 1px</button>
+      <button class="btn" data-edge="outline" title="keep only the 1px rim">outline</button>
+      <button class="btn" data-edge="solid" title="solid silhouette: bridge small gaps and
+        fill every hole (the inverse of outline)">solid</button>
+      <button class="btn" data-edge="fill">hole-fill</button>
+      <button class="btn" data-edge="close">close</button>
+    </div>
+    <div class="stat">${m.px}px${m.bbox ? `  bbox ${m.bbox[0]},${m.bbox[1]}–${m.bbox[2]},${m.bbox[3]}` : ''}
+      depth ${m.depth}  z ${S.masks.indexOf(m)}  ${m.kind}${m.nfrag > 1 ? `  ${m.nfrag} frags` : ''}</div>
+    <div class="stat">recognised: <b>${m.label || m.name}</b>${m.conf ? ` (${Math.round(m.conf * 100)}%)` : ''}
+      ${m.anim_hint ? `<br>anim hint: ${m.anim_hint}` : ''}</div>`;
+  $('iName').onchange = e => { m.name = e.target.value.trim() || m.name; renderList(); markDirty(m); };
+  $('iKind').onchange = e => { m.kind = e.target.value; renderList(); markDirty(m); };
+  $('iCol').oninput = e => { m.color = cssHex(e.target.value); retint(m); rebuildOverlay(); renderList(); markDirty(m); };
+  $('iAnim').onchange = e => { m.anim = e.target.value; m.params = animParams(m);
+                               renderInsp(); markDirty(m); };
+  const box = $('iParams'), defs = ANIM_DEFS[m.anim] || {};
+  m.params = animParams(m);
+  for (const [k, d] of Object.entries(defs)) {
+    const row = document.createElement('div');
+    row.style.display = 'contents';
+    if (k === 'phase') {
+      const auto = m.params.phase === null;
+      row.innerHTML = `<label>phase</label><span style="display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="pAuto" ${auto ? 'checked' : ''} title="auto phase">
+        <input type="range" id="p_phase" min="${d[0]}" max="${d[1]}" step="${d[3]}"
+          value="${auto ? 0 : m.params.phase}" ${auto ? 'disabled' : ''} style="flex:1">
+        <span class="stat" id="pv_phase" style="width:34px">${auto ? 'auto' : m.params.phase}</span></span>`;
+      box.appendChild(row);
+      row.querySelector('#pAuto').onchange = e => {
+        m.params.phase = e.target.checked ? null : 0; renderInsp(); markDirty(m); };
+      const sl = row.querySelector('#p_phase');
+      sl.oninput = () => { m.params.phase = +sl.value;
+        $('pv_phase').textContent = (+sl.value).toFixed(2); markDirty(m); };
+      continue;
+    }
+    row.innerHTML = `<label>${k}</label><span style="display:flex;gap:6px;align-items:center">
+      <input type="range" id="p_${k}" min="${d[0]}" max="${d[1]}" step="${d[3]}"
+        value="${m.params[k]}" style="flex:1">
+      <span class="stat" id="pv_${k}" style="width:34px">${m.params[k]}</span></span>`;
+    box.appendChild(row);
+    const sl = row.querySelector(`#p_${k}`);
+    sl.oninput = () => { m.params[k] = +sl.value; $('pv_' + k).textContent = sl.value;
+                         markDirty(m); };
+  }
+  const sh = $('iShadow'), mover = ['sway', 'bob', 'flutter', 'gustflick'].includes(m.anim);
+  sh.checked = !!m.shadow;
+  sh.disabled = !mover;
+  sh.onchange = () => { m.shadow = sh.checked; markDirty(m);
+    setStatus(m.shadow ? `shadow sync on for ${m.name} — its cast shadow moves with it`
+      : `shadow sync off for ${m.name}`); };
+  fillPresets(m);
+  $('iPreset').onchange = e => {
+    const p = presetGet(m.anim, e.target.value);
+    if (p) { m.params = animParams(Object.assign({}, m, { params: Object.assign({}, m.params, p) }));
+             renderInsp(); markDirty(m); toast(`preset "${e.target.value}" applied to ${m.name}`); } };
+  $('iPresetSave').onclick = () => presetSave(m);
+  inspEl.querySelectorAll('[data-edge]').forEach(b => b.onclick = () => doEdge(m, b.dataset.edge));
+}
+
+/* M4: param presets — built-ins per anim type + user presets in localStorage */
+const PRESETS = {
+  sway:      { breeze: { speed: 1, amp: 0.6, gust: 0.08 }, windy: { speed: 2, amp: 1.4, gust: 0.2 },
+               storm: { speed: 3, amp: 2, gust: 0.3 } },
+  bob:       { floaty: { speed: 1, amp: 0.8, circ: 0.8 }, nervous: { speed: 3, amp: 1.4, circ: 0.3 } },
+  ripple:    { calm: { speed: 2, wavelength: 24, amp: 0.6 }, chop: { speed: 3, wavelength: 9, amp: 1.6 } },
+  shimmer:   { glint: { speed: 4, coverage: 0.3 }, sheen: { speed: 2, coverage: 0.8 } },
+  flutter:   { bees: { speed: 4, amp: 1 }, leaves: { speed: 2, amp: 2 } },
+  gustflick: { lazy: { gusts: 1, strength: 1, travel: 32 }, gusty: { gusts: 4, strength: 2, travel: 12 } },
+  static:    {},
+};
+function userPresets() { try { return JSON.parse(localStorage.getItem('ps_presets') || '{}'); } catch (e) { return {}; } }
+function presetGet(type, name) {
+  return (PRESETS[type] || {})[name] || (userPresets()[type] || {})[name];
+}
+function fillPresets(m) {
+  const sel = $('iPreset');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">apply preset…</option>';
+  const add = (obj, label) => {
+    const names = Object.keys(obj || {});
+    if (!names.length) return;
+    const og = document.createElement('optgroup');
+    og.label = label;
+    for (const n of names) {
+      const o = document.createElement('option');
+      o.value = n; o.textContent = n;
+      og.appendChild(o);
+    }
+    sel.appendChild(og);
+  };
+  add(PRESETS[m.anim], 'built-in');
+  add(userPresets()[m.anim], 'mine');
+}
+function presetSave(m) {
+  const mine = Object.keys(userPresets()[m.anim] || {}).length + 1;
+  const name = prompt(`save current ${m.anim} params as`, `my ${m.anim} ${mine}`);
+  if (!name || !name.trim()) return;
+  const all = userPresets();
+  all[m.anim] = all[m.anim] || {};
+  all[m.anim][name.trim().slice(0, 24)] = animParams(m);
+  try { localStorage.setItem('ps_presets', JSON.stringify(all)); } catch (e) {}
+  fillPresets(m);
+  toast(`preset "${name.trim()}" saved`);
+}
+async function doEdge(m, op) {
+  setStatus(`edge ${op} on ${m.name}…`);
+  try {
+    const r = await api('/api/edge', { pid: S.meta.id, rle: encodeRLE(m.data), op });
+    pushUndo(m);
+    m.data = decodeRLE(r.rle);
+    retint(m); rebuildOverlay(); renderList(); markDirty(m); draw();
+    setStatus(`edge ${op}: ${r.px}px`);
+  } catch (err) { setStatus('edge failed: ' + err.message); }
+}
+
+/* ------------------------------------------------------------------ new/dup/del */
+function newMask() {
+  if (!S.img) { setStatus('load an image first'); return; }
+  const m = makeMask({ name: `mask ${S.masks.length + 1}` });
+  S.masks.push(m); S.sel = S.masks.length - 1;
+  renderList(); rebuildOverlay(); markDirty(m);
+}
+function dupMask() {
+  const m = selMask(); if (!m) return;
+  const c = makeMask({ name: m.name + ' copy', kind: m.kind, color: nextColor(S.masks.length),
+                       data: m.data.slice(), nfrag: m.nfrag });
+  retint(c);
+  S.masks.splice(S.sel + 1, 0, c); S.sel++;
+  renderList(); rebuildOverlay(); markDirty(c);
+}
+function delMask() {
+  const m = selMask(); if (!m) return;
+  if (m.id) (S.pendingDeletes = S.pendingDeletes || []).push(m.id);
+  S.masks.splice(S.sel, 1); S.sel = Math.min(S.sel, S.masks.length - 1);
+  renderList(); rebuildOverlay(); scheduleSave(); draw();
+}
+$('newmask').onclick = newMask;
+$('dup').onclick = dupMask;
+$('del').onclick = delMask;
+
+/* ------------------------------------------------------------------ undo */
+function undo() {
+  const u = S.undo.pop(); if (!u) return;
+  S.redo.push({ m: u.m, data: u.m.data.slice() });
+  u.m.data.set(u.data);
+  retint(u.m); rebuildOverlay(); renderList(); markDirty(u.m); draw();
+  setStatus('undo');
+}
+function redo() {
+  const r = S.redo.pop(); if (!r) return;
+  S.undo.push({ m: r.m, data: r.m.data.slice() });
+  r.m.data.set(r.data);
+  retint(r.m); rebuildOverlay(); renderList(); markDirty(r.m); draw();
+}
+
+/* ------------------------------------------------------------------ auto-seg */
+/* The editor parses the loaded image for recognised objects and presents them as a
+   choose-from list (plan §4/§7: suggestions are editable, never authoritative).
+   Settings map 1:1 onto the engine cfg and persist in localStorage. */
+let sgCache = [];
+let sgPrevCanvas = null, sgPrevIdx = -1;
+const ASG_DEFAULT = { cap: 60, min: 25, merge: 2, absorb: 14, grow: 2, conn: 8,
+                      regions: true, onload: true, recog: true };
+try { S.asg = Object.assign({}, ASG_DEFAULT, JSON.parse(localStorage.getItem('ps_asg') || '{}')); }
+catch (e) { S.asg = Object.assign({}, ASG_DEFAULT); }
+function asgSave() { try { localStorage.setItem('ps_asg', JSON.stringify(S.asg)); } catch (e) {} }
+function asgToForm() {
+  $('asCap').value = S.asg.cap; $('asMin').value = S.asg.min; $('asMerge').value = S.asg.merge;
+  $('asAbsorb').value = S.asg.absorb; $('asGrow').value = S.asg.grow;
+  $('asConn').value = String(S.asg.conn);
+  $('asRegions').checked = !!S.asg.regions; $('asOnload').checked = !!S.asg.onload;
+  $('asRecog').checked = S.asg.recog !== false;
+}
+function asgFromForm() {
+  const num = (id, lo, hi, fb) => Math.min(hi, Math.max(lo, +$(id).value || fb));
+  S.asg = { cap: num('asCap', 10, 200, 60), min: num('asMin', 4, 500, 25),
+            merge: num('asMerge', 0, 6, 2), absorb: num('asAbsorb', 0, 40, 14),
+            grow: num('asGrow', 0, 4, 2), conn: +$('asConn').value === 4 ? 4 : 8,
+            regions: $('asRegions').checked, onload: $('asOnload').checked,
+            recog: $('asRecog').checked };
+  asgSave();
+}
+function updateSel() {
+  const n = sgCache.filter(s => s._box && s._box.checked).length;
+  $('msel').textContent = n ? `${n} selected` : '';
+}
+function sgMask(s) { return s._mask || (s._mask = decodeRLE(s.rle)); }
+function sgThumb(s) {
+  const cv = document.createElement('canvas');
+  cv.width = 40; cv.height = 40;
+  const c2 = cv.getContext('2d');
+  const d = sgMask(s);
+  const bb = s.bbox || [0, 0, S.W - 1, S.H - 1];
+  const x0 = bb[0], y0 = bb[1], bw = bb[2] - x0 + 1, bh = bb[3] - y0 + 1;
+  const tmp = document.createElement('canvas');
+  tmp.width = bw; tmp.height = bh;
+  const tctx = tmp.getContext('2d');
+  const id = tctx.createImageData(bw, bh);
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+    const on = d[(y + y0) * S.W + (x + x0)], o = (y * bw + x) * 4;
+    id.data[o] = s.color[0]; id.data[o + 1] = s.color[1]; id.data[o + 2] = s.color[2];
+    id.data[o + 3] = on ? 255 : 0;
+  }
+  tctx.putImageData(id, 0, 0);
+  c2.imageSmoothingEnabled = false;
+  const k = Math.min(40 / bw, 40 / bh);
+  c2.drawImage(tmp, (40 - bw * k) / 2, (40 - bh * k) / 2, bw * k, bh * k);
+  return cv;
+}
+function sgPreviewCanvas(i) {
+  if (sgPrevIdx === i && sgPrevCanvas) return sgPrevCanvas;
+  const s = sgCache[i];
+  const c = document.createElement('canvas');
+  c.width = S.W; c.height = S.H;
+  const cx = c.getContext('2d');
+  const id = cx.createImageData(S.W, S.H);
+  const d = sgMask(s);
+  for (let p = 0; p < d.length; p++) {
+    const o = p * 4;
+    id.data[o] = 255; id.data[o + 1] = 255; id.data[o + 2] = 255;
+    id.data[o + 3] = d[p] ? 160 : 0;
+  }
+  cx.putImageData(id, 0, 0);
+  sgPrevCanvas = c; sgPrevIdx = i;
+  return c;
+}
+function sgRow(s, i) {
+  const row = document.createElement('div');
+  row.className = 'srow';
+  const conf = s.conf ? ` <span class="conf" title="recognition confidence">${Math.round(s.conf * 100)}%</span>` : '';
+  row.innerHTML = `<input type="checkbox" title="import this" ${s.kind === 'object' ? 'checked' : ''}>` +
+    `<span class="thumb"></span>` +
+    `<span class="nm" title="${s.name}${s.anim ? ' — suggested anim: ' + s.anim : ''}">${s.name}</span>` +
+    `<span class="kind">${s.kind}${s.nfrag > 1 ? ' ×' + s.nfrag : ''}${conf}</span>` +
+    `<span class="px">${s.px}px</span>`;
+  const box = row.querySelector('input');
+  s._box = box;
+  box.onchange = updateSel;
+  row.onclick = ev => {                       // click a row = preview it on the canvas
+    if (ev.target === box) return;
+    S.sgPreview = (S.sgPreview === i) ? null : i;
+    document.querySelectorAll('#mrows .srow').forEach(r2 => r2.classList.remove('peeking'));
+    if (S.sgPreview !== null) row.classList.add('peeking');
+    draw();
+  };
+  row.querySelector('.thumb').appendChild(sgThumb(s));
+  return row;
+}
+async function runAutoseg(auto) {
+  if (!S.meta) { setStatus('load an image first'); return; }
+  $('modal').classList.add('on');
+  asgToForm();
+  $('mstat').textContent = 'parsing the image for recognised objects…';
+  $('mrows').innerHTML = '';
+  try {
+    const r = await api('/api/autoseg', {
+      pid: S.meta.id, max_suggestions: S.asg.cap, conn: S.asg.conn,
+      cfg: { min_object_px: S.asg.min, merge_k: S.asg.merge, absorb_gap: S.asg.absorb,
+             grow_r: S.asg.grow, include_regions: S.asg.regions,
+             recognise: S.asg.recog !== false } });
+    sgCache = r.suggestions;
+    sgPrevCanvas = null; sgPrevIdx = -1; S.sgPreview = null;
+    const nobj = sgCache.filter(s => s.kind === 'object').length;
+    $('mstat').textContent = `${nobj} objects recognised` +
+      (sgCache.length - nobj ? ` + ${sgCache.length - nobj} regions` : '') +
+      ` in ${r.ms} ms — tick to import, click a row to preview`;
+    for (const [kind, label] of [['object', 'recognised objects'],
+                                 ['region', 'plate regions (floor / wall / water sheets)']]) {
+      const items = sgCache.map((s, i) => [s, i]).filter(([s]) => s.kind === kind);
+      if (!items.length) continue;
+      const g = document.createElement('div');
+      g.className = 'grp';
+      g.innerHTML = `${label} — ${items.length} ` +
+        `<button class="ib gall">tick all</button> <button class="ib gnone">none</button>`;
+      $('mrows').appendChild(g);
+      g.querySelector('.gall').onclick = () => { items.forEach(([s]) => { s._box.checked = true; }); updateSel(); };
+      g.querySelector('.gnone').onclick = () => { items.forEach(([s]) => { s._box.checked = false; }); updateSel(); };
+      for (const [s, i] of items) $('mrows').appendChild(sgRow(s, i));
+    }
+    updateSel();
+    if (auto) setStatus(`auto-seg recognised ${nobj} objects in the loaded image — pick the ones you want`);
+  } catch (err) {
+    $('mstat').textContent = 'auto-seg failed: ' + err.message;
+  }
+}
+function closeAutoseg() {
+  $('modal').classList.remove('on');
+  S.sgPreview = null; sgPrevCanvas = null; sgPrevIdx = -1;
+  draw();
+}
+$('autoseg').onclick = () => runAutoseg(false);
+$('mset').onclick = () => $('msettings').classList.toggle('on');
+$('mrerun').onclick = () => { asgFromForm(); runAutoseg(false); };
+$('asReset').onclick = () => { S.asg = Object.assign({}, ASG_DEFAULT); asgSave(); asgToForm(); };
+['asCap', 'asMin', 'asMerge', 'asAbsorb', 'asGrow', 'asConn', 'asRegions', 'asOnload', 'asRecog']
+  .forEach(id => { $(id).onchange = asgFromForm; });
+$('mobjs').onclick = () => { sgCache.forEach(s => { if (s._box) s._box.checked = s.kind === 'object'; }); updateSel(); };
+$('mnone').onclick = () => { sgCache.forEach(s => { if (s._box) s._box.checked = false; }); updateSel(); };
+$('mcancel').onclick = closeAutoseg;
+$('mimport').onclick = () => {
+  let n = 0;
+  for (const s of sgCache) {
+    if (!s._box || !s._box.checked) continue;
+    const m = makeMask({ name: s.name, kind: s.kind, color: s.color, nfrag: s.nfrag || 1,
+                         label: s.label || s.name, conf: s.conf || 0,
+                         anim: animFromHint(s.anim), anim_hint: s.anim || '', params: {},
+                         data: sgMask(s).slice() });
+    retint(m);
+    S.masks.push(m); markDirty(m); n++;
+  }
+  S.sel = S.masks.length - 1;
+  closeAutoseg();
+  rebuildOverlay(); renderList(); draw();
+  setStatus(`imported ${n} masks from auto-seg (editable — fix with brush/eraser/wand)`);
+  infoEl.textContent = `${S.meta.w}×${S.meta.h} → native ${S.W}×${S.H}  •  ${S.masks.length} masks`;
+};
+
+/* ------------------------------------------------------------------ M3: render + export
+   The server renders N frames as one grid strip; we play it here with rAF at the target
+   fps. Exports (GIF / game bundle) reuse the cached render, so preview == export. */
+const PV = { strip: null, N: 0, fps: 12, cols: 8, fw: 0, fh: 0, cur: -1, playing: false, t0: 0 };
+function pvDraw(f) {
+  const c = $('pvw'), x = c.getContext('2d');
+  if (!PV.strip || !PV.N) return;
+  f = ((f % PV.N) + PV.N) % PV.N;
+  if (c.width !== PV.fw || c.height !== PV.fh) { c.width = PV.fw; c.height = PV.fh; }
+  x.imageSmoothingEnabled = false;
+  const r = Math.floor(f / PV.cols), cc = f % PV.cols;
+  x.clearRect(0, 0, PV.fw, PV.fh);
+  x.drawImage(PV.strip, cc * PV.fw, r * PV.fh, PV.fw, PV.fh, 0, 0, PV.fw, PV.fh);
+  PV.cur = f;
+  $('frlbl').textContent = (f + 1) + '/' + PV.N;
+  const sc = $('scrub');
+  if (+sc.max !== PV.N - 1) sc.max = PV.N - 1;
+  if (+sc.value !== f) sc.value = f;
+}
+function pvLoop(ts) {
+  if (!PV.playing) return;
+  const f = Math.floor((ts - PV.t0) / (1000 / PV.fps));
+  if (f !== PV.cur) pvDraw(f);
+  requestAnimationFrame(pvLoop);
+}
+function pvPlay(on) {
+  PV.playing = on === undefined ? !PV.playing : on;
+  $('play').textContent = PV.playing ? '❚❚' : '▶';
+  $('play').classList.toggle('on', PV.playing);
+  if (PV.playing) { PV.t0 = performance.now() - PV.cur * (1000 / PV.fps);
+                    requestAnimationFrame(pvLoop); }
+}
+$('play').onclick = () => pvPlay();
+$('scrub').oninput = e => { pvPlay(false); pvDraw(+e.target.value); };
+$('tlN').onchange = () => { S.docDirty = true; saveDocNFps(); };
+$('tlFps').onchange = () => { S.docDirty = true; saveDocNFps(); };
+async function saveDocNFps() {
+  if (!S.meta) return;
+  try { await api('/api/project/' + S.meta.id, { N: +$('tlN').value, fps: +$('tlFps').value }); }
+  catch (e) {}
+}
+/* GIF/bundle options persist per browser (palette size option, plan §6 M4) */
+try {
+  const g = JSON.parse(localStorage.getItem('ps_gif') || '{}');
+  if (g.scale) $('tlScale').value = g.scale;
+  if (g.cols) $('tlCols').value = g.cols;
+} catch (e) {}
+function gifOptsSave() {
+  try { localStorage.setItem('ps_gif', JSON.stringify(
+    { scale: $('tlScale').value, cols: $('tlCols').value })); } catch (e) {}
+}
+$('tlScale').onchange = gifOptsSave;
+$('tlCols').onchange = gifOptsSave;
+function tlBusy(on) { ['render', 'exgif', 'exzip'].forEach(id => { $(id).disabled = on; }); }
+async function doRender() {
+  if (!S.meta) { setStatus('load an image first'); return; }
+  await flushSave();
+  tlBusy(true); pvPlay(false);
+  $('tlstat').textContent = 'rendering ' + $('tlN').value + ' frames…';
+  try {
+    const r = await api('/api/render', { pid: S.meta.id, N: +$('tlN').value,
+                                         fps: +$('tlFps').value });
+    const img = new Image();
+    img.onload = () => {
+      Object.assign(PV, { strip: img, N: r.N, fps: r.fps, cols: r.cols, fw: r.fw, fh: r.fh });
+      pvDraw(0); pvPlay(true);
+      $('tlstat').textContent = `${r.N}f @${r.fps}fps in ${r.ms}ms — ${r.animated}/${r.objects}` +
+        ` animated — stray px ${r.audit.stray_max}${r.audit.stray_max ? ' ✗' : ' ✓'}`;
+      tlBusy(false);
+    };
+    img.onerror = () => { $('tlstat').textContent = 'strip failed to load'; tlBusy(false); };
+    img.src = r.strip + '?t=' + Date.now();
+    setStatus(`rendered ${r.animated}/${r.objects} animated objects, ${r.ms} ms`);
+  } catch (err) {
+    $('tlstat').textContent = 'render failed: ' + err.message; tlBusy(false);
+  }
+}
+function download(url, name) {
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+async function doExportGif() {
+  if (!S.meta) return;
+  await flushSave(); tlBusy(true); pvPlay(false);
+  $('tlstat').textContent = 'encoding GIF (shared palette + gifsicle -O3)…';
+  try {
+    const r = await api('/api/gif', { pid: S.meta.id, N: +$('tlN').value,
+                                      fps: +$('tlFps').value, scale: +$('tlScale').value,
+                                      colors: +$('tlCols').value });
+    download(r.url + '?t=' + Date.now(), 'pixel-sway.gif');
+    $('tlstat').textContent = `GIF ${(r.bytes / 1048576).toFixed(2)} MB, ${r.frames}f ` +
+      `×${r.scale}, ${r.colors} colours, ${r.total_ms} ms` + (r.warn ? ' — ' + r.warn : '');
+    setStatus('GIF exported (' + (r.bytes / 1048576).toFixed(2) + ' MB)');
+  } catch (err) { $('tlstat').textContent = 'GIF failed: ' + err.message; }
+  tlBusy(false);
+}
+async function doExportBundle() {
+  if (!S.meta) return;
+  await flushSave(); tlBusy(true);
+  $('tlstat').textContent = 'packing game bundle (plate, walkmask, sheets, scene.json)…';
+  try {
+    const r = await api('/api/bundle', { pid: S.meta.id, N: +$('tlN').value,
+                                         fps: +$('tlFps').value,
+                                         colors: +$('tlCols').value });
+    download(r.url + '?t=' + Date.now(), 'pixel-sway-bundle.zip');
+    $('tlstat').textContent = `bundle ${(r.bytes / 1048576).toFixed(2)} MB — ${r.sheets}` +
+      ` RGBA sheets, ${r.atlas_pages || 0} atlas pages, ${r.objects} objects,` +
+      ` walkable ${r.walkable_px}px, ${r.total_ms} ms`;
+    setStatus('bundle exported (' + r.sheets + ' sheets)');
+  } catch (err) { $('tlstat').textContent = 'bundle failed: ' + err.message; }
+  tlBusy(false);
+}
+$('render').onclick = doRender;
+$('exgif').onclick = doExportGif;
+$('exzip').onclick = doExportBundle;
+
+/* ------------------------------------------------------------------ rail + keys */
+document.querySelectorAll('.tool').forEach(b => b.onclick = () => {
+  S.tool = b.dataset.tool;
+  document.querySelectorAll('.tool').forEach(x => x.classList.toggle('on', x === b));
+  canvas.style.cursor = S.tool === 'pan' ? 'grab' : 'crosshair';
+  draw();
+});
+$('nib').oninput = e => { S.nib = +e.target.value; $('nibV').textContent = S.nib; draw(); };
+$('tol').oninput = e => { S.tol = +e.target.value; $('tolV').textContent = S.tol; };
+$('mode').onclick = e => { S.add = !S.add; e.target.classList.toggle('on', S.add);
+  e.target.textContent = S.add ? '+ add' : '− sub'; };
+$('conn').onclick = e => { S.conn = S.conn === 8 ? 4 : 8; e.target.textContent = S.conn + '-conn'; };
+$('wmode').onclick = e => { S.wmode = S.wmode === 'hue' ? 'seed' : 'hue';
+  e.target.textContent = S.wmode; e.target.classList.toggle('on', S.wmode === 'hue');
+  setStatus(S.wmode === 'hue'
+    ? 'wand: hue-family metric — one click grabs a whole dithered object'
+    : 'wand: classic seed-colour tolerance (palette-snap available)'); };
+$('snap').onclick = e => { S.snap = !S.snap; e.target.classList.toggle('on', S.snap); };
+
+let spaceDown = false;
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const k = e.key.toLowerCase();
+  if (k === ' ') { spaceDown = true; e.preventDefault(); return; }
+  if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if ((e.ctrlKey || e.metaKey) && k === 'd') { e.preventDefault(); dupMask(); return; }
+  if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); flushSave(); return; }
+  /* M4 shortcuts: timeline + exports + help */
+  if (k === 'p') { pvPlay(); return; }
+  if (k === ',') { pvPlay(false); pvDraw(PV.cur - 1); return; }
+  if (k === '.') { pvPlay(false); pvDraw(PV.cur + 1); return; }
+  if (k === 'g') { e.preventDefault(); e.shiftKey ? doExportBundle() : doExportGif(); return; }
+  if (k === '?' || (e.shiftKey && k === '/')) { $('help').classList.toggle('on'); return; }
+  if (k === 'escape') {
+    if ($('help').classList.contains('on')) $('help').classList.remove('on');
+    else if ($('modal').classList.contains('on')) closeAutoseg();
+    return;
+  }
+  if (k === 'delete') { delMask(); return; }
+  const tools = { b: 'brush', e: 'eraser', r: 'rect', l: 'lasso', w: 'wand', h: 'pan' };
+  if (tools[k]) { document.querySelector(`.tool[data-tool=${tools[k]}]`).click(); return; }
+  if (k === 'a') runAutoseg();
+  else if (k === 'n') newMask();
+  else if (k === '[') { $('nib').value = Math.max(1, S.nib - 1); $('nib').oninput({ target: $('nib') }); }
+  else if (k === ']') { $('nib').value = Math.min(16, S.nib + 1); $('nib').oninput({ target: $('nib') }); }
+  else if (k === '+' || k === '=') setZoom(S.zoom * 1.25);
+  else if (k === '-') setZoom(S.zoom / 1.25);
+  else if (k === '0') fit();
+  else if (k === '1') centerZoom(1);
+  else if (k === '2') centerZoom(2);
+});
+window.addEventListener('keyup', e => { if (e.key === ' ') spaceDown = false; });
+
+$('zoomIn').onclick = () => setZoom(S.zoom * 1.25);
+$('zoomOut').onclick = () => setZoom(S.zoom / 1.25);
+$('fit').onclick = fit;
+$('one').onclick = () => centerZoom(1);
+$('two').onclick = () => centerZoom(2);
+$('file').addEventListener('change', e => { if (e.target.files[0]) upload(e.target.files[0]); });
+$('recent').onchange = e => { if (e.target.value) openProject(e.target.value); };
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => {
+  e.preventDefault();
+  if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+});
+window.addEventListener('resize', resize);
+window.addEventListener('beforeunload', () => { if (S.dirty.size) navigator.sendBeacon?.('/api/masks'); });
+window.__PS = S;            // test hook: app/tests/ui_smoke.js drives the editor through this
+resize(); updZoom(); renderList();
+const qp = new URLSearchParams(location.search).get('p');
+if (HAVE_SERVER && qp) openProject(qp).catch(err => setStatus('cannot open project: ' + err.message));
+</script>
+</body>
+</html>
