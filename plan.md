@@ -55,6 +55,24 @@ workspace files (project dir per session: img/, masks/, out/)
 7. Shared global palette (quantize once from a frame montage), `dither=NONE` → no flicker,
    small LZW size; finish with `gifsicle -O3` (lossless, ~10× smaller).
 8. Audit hook: frame-diff outside allowed zones must be 0 (catches stray animated pixels).
+9. Every pixel knows its ground row (M6a, `engine/depth.py`): the wall/floor junction per
+   column is the top row of the floor sheet (the horizontal plate band at the wall base);
+   standing surfaces inherit their column's junction row, ground pixels their own row,
+   objects their ground contact (97th row percentile). z sort keys are the iso closeness
+   formula evaluated **at the feet** (3·base_y − y at y = base_y), never averaged over the
+   body — the mean-closeness key ranked a tall palm in front of a short pot on the same
+   ground row (measured counterexample in test_m6).
+10. The normal map is a bump, not a solve (M6c, `engine/depth.normal_map`): height = the
+    palette-snapped luminance (dither-safe), box-meaned 3×3, central-differenced into a
+    tangent-space RGB map, G up (OpenGL). Flat shading encodes exactly (128, 128, 255);
+    every vector is unit and faces the viewer. It ships as `<pid>/normal.png` and shows
+    in the **normals** view tab — a derived view of the art, not reconstructed geometry.
+11. The depth accelerator is OPTIONAL (M6e, `engine/depth_ml.py`): engine core — every
+    byte the render/sprite/audit path touches — stays numpy+PIL. The monocular-depth
+    blend (onnxruntime, imported lazily inside `fuse()` only when a runtime and a model
+    file exist) feeds the depth TAB as `depth_ml.png` and nothing else; without it the
+    server ships the pure parse field. `DEPTH_MODEL=off|da|midas` picks the path, and
+    the M2 upload budget (<2 s) is kept by fusing in a background thread.
 
 ## 3. Animation catalog (MVP)
 
@@ -98,7 +116,7 @@ owners keep theirs) — implemented, currently rolled back in the courtyard GIF,
 
 ## 6. Milestones & acceptance
 
-**Status 2026-10-30: M1 ✔, M2 ✔, M3 ✔ and M4 ✔ — all machine-verified.**
+**Status 2026-10-31: M1 ✔, M2 ✔, M3 ✔, M4 ✔, M5 ✔, M6a ✔, M6b ✔, M6c ✔, M6e ✔ — all machine-verified.**
 M2 numbers, measured against the origin session's `seg.npy` ground truth by
 `app/tests/test_m2.py`: wand grabs the fern in one click at tol 30 (57% of the object,
 1.2% of frame; leak-guarded pot 94%/0.9%); auto-seg returns 85.9% of the 85 courtyard
@@ -132,14 +150,69 @@ under alpha 0, plate identical to the art outside every mask.
   sprites sampled the source at cell-relative x (texture bug, M3/M4), and the leaf-unit
   split had drifted from the origin's multi-source BFS.
   *Accept:* `app/tests/test_m5.py` 34 checks + ui_smoke (now 78 checks), all pass.
+- **M6 depth & surfaces (started 2026-10-31, see §10):**
+  - **M6a ✔ done (entry 13)** — `engine/depth.py`: per-pixel ground-row field (junction
+    line from the floor sheet's top row; NONE/GROUND/WALL/OBJECT orientation; closeness
+    map in the origin's uint8 format), computed at upload and served as
+    `<pid>/depth.png`; z sort key corrected to closeness at the feet (§2.9). *Accept:*
+    `app/tests/test_m6.py` — synthetic iso room answers exact (junction row, surface
+    labels, per-surface base_y, feet-key ties, hole axis); courtyard field inside the
+    perf share (245 ms) with spearman ≥ 0.5 vs the origin `depth.npy` and render audit
+    still 0; m2–m5 + ui_smoke unchanged.
+  - **M6b ✔ done (entry 14)** — editor exposure: `D` cycles the canvas overlay
+    art → depth closeness → surface orientation (`<pid>/depth.png`, `<pid>/orient.png`,
+    loaded with the project); the inspector gains a *surface* select (auto / standing /
+    ground plane) that overrides the recogniser in the field; a wand **depth guard**
+    (rail button, cycles off/2/4/8 rows) stops the colour flood at ground-row jumps;
+    `split @depth` (edge op + auto-seg setting, default on) cuts a fused suggestion or
+    mask at surface boundaries and makes the pieces their own masks. *Accept:*
+    `test_m6.py` 43 checks (guarded wand stays on its surface on synthetic + courtyard,
+    fused vine+bush splits into two single-surface suggestions only when asked, surface
+    round-trips through /api/masks) and `ui_smoke.js` 89 checks.
+  - **M6c ✔ done (entry 15)** — editor ergonomics + view tabs + the derived normal map,
+    all user-driven: header **undo/redo buttons** (↶ ↷) that mirror the ctrl+Z history
+    (disabled state + "N steps" in the tooltip); the rail's seven tools become inline
+    **SVG icons** and gain a **select** tool (`V`: topmost visible mask under the cursor,
+    ⇧ adds a 3-px ring search, hidden masks never pick, empty art keeps the selection);
+    the overlay-cycle button is replaced by **view tabs** above the stage — masks /
+    depth / normals / anim (`D` cycles; the anim tab renders on first open and plays the
+    loop in place; non-mask tabs are pan-only so painting can never land on a derived
+    view); and `engine/depth.normal_map()` derives the **tangent-space bump map**
+    (palette-snapped luminance → 3×3 box mean → central differences → unit encode, G up),
+    shipped per project as `normal.png` (projects predating M6 rebuild a missing derived
+    view on first GET). *Accept:* `test_m6.py` 54 checks (7 normal-map checks: flat =
+    exactly (128, 128, 255), 1-px dither interior deviates 0 levels vs step tilt sd 11.3,
+    ramp signs, unit length |n|−1 ≤ 0.006, z ≥ 0.75, determinism; + 2 lazy-rebuild checks)
+    and `ui_smoke.js` 104 checks (16 new: buttons, tabs, icons, select); m2–m5 unchanged,
+    M2 recall still 85.9 %.
+  - **M6e ✔ done (entry 16)** — the depth pass bake-off + optional model fusion. User
+    reported the depth pass reads flat; `app/tests/depth_alts.py` scored 24 candidates
+    against the origin `depth.npy` (classical: iso ramp, shape-from-shading via
+    Poisson-integrated normals, luminance; models: Depth Anything V2 small fp32/int8,
+    MiDaS v2.1 small; plus blend grids). Models win layout (DA rho .804 vs parse .556
+    with objects / .688 art-only) but blur interiors; the parse wins within-object
+    ordering; the blend wins both (DA w=0.8: rho .829, rho_in .454). Shipped as an
+    OPTIONAL accelerator per §2.11: background fuse at upload, lazy `depth_ml.png` in
+    the depth tab, parse-only fallback, weights chosen by a documented rule. Measured
+    negatives: no candidate recovers the reference's facade relief from one pixel-art
+    image; iso-physical interior ramps contradict the reference (rho .556 -> .02).
+    *Accept:* test_m6 58 checks (fused rho >= .75 and >= parse + .10; upload < 2 s with
+    the accelerator armed: 673 ms; graceful None without runtime) + ui_smoke 106.
+  - **M6d (open)** — shading-aware inpaint from the orientation field + a light direction
+    inferred from the art's own highlight/shadow placement; optional `relight` clip type
+    consuming the M6c normal map.
 - **Phase 2 (post-M5):** object recomposition editor (drag objects, live re-inpaint of source
   and destination holes), optional runtime snippet export for the custom web engine.
 
 ## 7. Risks & mitigations
 
 - **Inpaint streaks under large masks** → multi-direction fill + amplitude caps; later: user
-  clean-plate layer.
-- **Z-order/occlusion confusion** → explicit z list + "static occluder" mask type.
+  clean-plate layer. M6a measured the obvious next step — choosing the fill axis from the
+  orientation field — and it does NOT beat M4 on patterned tilework (entry 13); M6c's
+  shading-aware inpaint is the open mitigation.
+- **Z-order/occlusion confusion** → explicit z list + "static occluder" mask type, plus
+  feet-based sort keys (M6a, §2.9). M6b's "split at depth break" will propose occlusion
+  cut lines automatically instead of asking the user (§8).
 - **Sandbox resets lose apt packages** → `build_log.md` keeps a one-line reinstall command;
   engine depends only on numpy+PIL+gifsicle(+ffmpeg later).
 - **Wand/auto-seg over-grab** → suggestions are always editable masks, never authoritative.
@@ -175,3 +248,62 @@ Clip conventions:
 
 MP4/APNG export, atlas packing (M5), engine importers (M5), non-pixel art, multi-user/auth, cloud storage, mobile layout,
 rotation/scale operators (pixel-unsafe), audio.
+
+## 10. Depth & surface orientation (M6, 2026-10-31)
+
+The origin session's depth pass (`seg_depth.py:250-303` → `depth.npy`, `depth_map.png`)
+was courtyard-specific: a teal wall class, a hardcoded `ys.min() < 240` stone band,
+carpets below row 260, per-column bottoms for four hardcoded vertical classes. M6 ports
+the *idea* — every pixel learns the ground row its surface stands on — with portable
+rules, and uses it where geometry, not colour, is the missing signal.
+
+- **Field** (`engine/depth.field`) → `base_y` (ground row per pixel), `orient`
+  (NONE/GROUND/WALL/OBJECT), `depth` (uint8 closeness in the origin's format),
+  `horizon` (the junction line). Junction per column = top row of the *floor sheet*
+  (largest component of stone+ground+misc — the horizontal band at the wall base),
+  interpolated across columns that objects stand in, median-smoothed along the face.
+  WALL = plate material above the junction; OBJECT = an object's ground contact;
+  lacy surfaces (tile outlines are shadow class) closed by box-majority passes;
+  whatever remains inherits base_y from its labelled neighbours. No floor sheet
+  (flat or side-view art) → base_y = y everywhere, i.e. today's behaviour.
+- **Sort key** = closeness at the feet (§2.9). `imaging.stats_of`, `depth.object_key`
+  and the index.html `maskStats` mirror agree; test_m6 pins all three together.
+- **Served**: upload writes `<pid>/depth.png`; `GET /api/image/<pid>/depth.png`.
+- **M6b shipped**: overlay (`D`), per-mask surface override (inspector select, stored on
+  the doc, honoured ahead of the recogniser label in the field), wand depth guard
+  (`dguard` rows: the flood may not leave the seed's ground-row band), and split at
+  surface boundaries (`/api/edge` op `depthsplit`, auto-seg cfg `depth_split`, default on
+  in the UI, off in the engine so M2's measured recall stays the baseline).
+  Honest limit, logged in entry 14: `base_y` is *continuous* across the wall/floor
+  junction by construction (a wall pixel's ground row is the junction row), so the
+  discrete cut signal is the orientation label (`surface_edges`), not a base_y jump; and
+  two objects on the *same* surface share one ground plane — splitting those is Phase-2
+  recomposition work, not this.
+- **Measured and rejected for now**: choosing the inpaint fill axis from `orient`
+  (build_log entry 13). On the courtyard's wall holes, vertical fill does not beat M4's
+  horizontal+bifill (24.58 vs 24.34 mean abs error against the art underneath) because
+  tilework is patterned in both axes — a lerp cannot reconstruct pattern on either axis.
+  `animate.inpaint` keeps its proven behaviour; M6c's shading-aware inpaint is the
+  version of this idea worth building.
+- **M6b** exposes the field in the editor (overlay toggle, per-region surface type,
+  split-at-depth-break, depth-aware wand) — the segregation/masking help this milestone
+  exists for.
+- **M6c shipped (entry 15)**: the editor's view layer. Tabs (masks / depth / normals /
+  anim, `D` cycles) replace the single overlay button; undo/redo gain header buttons;
+  the rail is icon-only plus a select tool; and the **normals** tab promotes a derived
+  normal map to a first-class view + export artifact (`normal.png`). The M6b position
+  that a normal *map* stays out of scope was reversed by the user's tab request, with
+  this scope guard: the map is **derived** (a bump from the art's own shading — see §2.10
+  and the measured dither/flatness numbers above), never solved geometry; the
+  shading-aware inpaint + `relight` ideas that would *consume* it are M6d.
+- **M6e shipped (entry 16)**: the depth bake-off and the optional model-fused depth
+  pass. The flatness complaint was structural, not cosmetic: the parse is a piecewise
+  ground-row plate while the reference carries facade relief and a curved floor. The
+  bake-off's honest conclusion — monocular models fix LAYOUT (rho .556/.688 -> .80-.83)
+  but not DETAIL (no candidate recovers the facade; percentile-clipped montages show the
+  models' wall signal is the row ramp), and the parse still owns within-object ordering
+  — is why the shipped artifact is a *blend*, and why it is optional: the engine rule
+  (§2.11) keeps core numpy+PIL, with onnxruntime as a lazy accelerator that degrades to
+  M6b bytes. Weights by rule, not by eye: maximise rho+conc+wallrho s.t. rho_in >= .40
+  against the art-only parse (DA-v2-int8 w=0.8, MiDaS-v21 w=0.6).
+- **M6d (open)**: shading-aware inpaint + optional `relight` clip type.

@@ -11,11 +11,241 @@ decisions taken, problems hit + fixes, and anything a future session must know
 ```bash
 apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   python3-pil python3-numpy gifsicle   # add ffmpeg when MP4 export lands
+# optional M6e depth accelerator (onnxruntime + Depth Anything V2 / MiDaS onnx,
+# ~190 MB into gitignored app/tests/{_ort,models}; server works without it):
+python3 app/tests/dl_models.py
 ```
 
 Workspace root holds: `plan.md`, `build_log.md`, app code (`app/`), and the reference
 artifacts from the origin session (`courtyard_animated.gif/.mp4`, `segmentation_mask.png`,
 `depth_map.png`, `seg_legend.json`, `contact_sheet.png`, `uploads/iso_00080_.png`).
+
+---
+
+## 2026-10-31 — Entry 16: M6e — depth bake-off, model-fused depth pass (optional accelerator)
+
+**Complaint that started it**: "the depth pass is flat". Confirmed against the origin
+`depth.npy`: the M6a field is a piecewise ground-row plate (smooth ramps, cut-out
+silhouettes, zero facade; wallrho -0.17) while the reference carries dense facade relief
+and a curved floor. So `app/tests/depth_alts.py` became a bake-off: 24 candidates scored
+against `depth.npy` (global spearman, pairwise concordance, within-object spearman,
+|grad| placement, facade-band spearman, within-object flatness ratio) — classical
+solutions, two ONNX model families, and fusions.
+
+| solution | rho | conc | rho_in | facade | flat (gt .20) | cost |
+|---|---|---|---|---|---|---|
+| m6a shipped | .556 | .728 | **+.703** | -.166 | .42 | 0 ms |
+| iso3 (iso-physical ramp) | .556 | .730 | +.706 | -.166 | .42 | 0 ms |
+| sfs (Poisson-integrated M6c normals) | .398 | .637 | +.193 | +.159 | .60 | 90 ms |
+| luminance proxy | .029 | .508 | -.074 | -.194 | .57 | 0 ms |
+| Depth Anything V2 small int8 | **.804** | .808 | +.196 | **+.388** | .21 | 4.5 s |
+| MiDaS v2.1 small | .781 | **.819** | +.413 | -.399 | .21 | 0.4 s |
+| fuse .8 DA + .2 parse | **.831** | .821 | +.299* | +.286* | .27 | 4.5 s |
+| fuse .6 MiDaS + .4 parse | .785* | .826* | +.406* | -.442* | — | 0.4 s |
+
+(*rows marked with the weight finally shipped; the table shows the family extremes and
+the shipped blends — full grid in `depth_alts.py` output, entry montages in
+`app/projects/_scratch/bakeoff*.png`.)
+
+**Negative results, measured**: shape-from-shading cannot carry layout (rho .398) and
+only hints at the facade (+.16); luminance alone is noise; an iso-physical height ramp
+inside objects/walls *contradicts* the reference (rho collapses .556 -> .02 by gamma=0.6)
+— the reference's object interiors really are near-constant, so "flat objects" is partly
+correct behaviour; and **no tested solution recovers the reference's facade relief from a
+single pixel-art image** — the models' facade score comes from matching the row ramp,
+visible in percentile-clipped montages. That detail came from real geometry in the origin
+session.
+
+**What shipped** (user chose "both models", weights picked by rule): optional accelerator
+`engine/depth_ml.py` — onnxruntime imported lazily *inside* `fuse()`, only when a runtime
+AND a model file exist; otherwise `fuse()` returns None and the server ships M6b bytes.
+`DEPTH_MODEL=off|da|midas` picks the path. Blend = w*znorm(model) + (1-w)*znorm(parse),
+percentile 1-99 encoded (min-max flattened contrast in the montages); model orientation
+fixed without ground truth via the row-axis correlation. Weight rule: maximise
+rho+conc+wallrho s.t. within-object rho_in >= .40, scored against the ART-ONLY parse
+(what upload sees) -> DA-v2-int8 w=0.8 (rho .829, rho_in .454), MiDaS w=0.6 (rho .785,
+rho_in .406). Upload runs the fuse in a **background thread** (M2's <2 s upload budget
+stays law: measured 673 ms with the accelerator armed); `depth_ml.png` is then fetched
+lazily by the editor (open + first depth-tab visit) and rebuilds synchronously on first
+GET for older projects; a still-fusing pid answers 404 instead of double-running.
+`/api/ping` reports `depth_ml` so UI/tests know the source; engine tools (wand guard,
+split, sort keys) keep using the parse field — only the depth TAB shows the fused map.
+
+**Verification**: test_m6 58 checks (M6e: budget pin, bg-write poll, GET, byte-exact
+reproduce from `depth_ml.fuse`, fused rho >= .75 and >= parse+.10 -> .829 vs .688,
+lazy rebuild, graceful None without runtime); ui_smoke 106 (ping source + fused img on
+the depth tab); m2-m5 unchanged (m2's round-trip first REGRESSED to >2 s with a
+synchronous fuse — that is what forced the background-thread design). Models + unpacked
+onnxruntime live in gitignored `app/tests/{models,_ort}/`; `app/tests/dl_models.py`
+refetches them after a sandbox reset (MiDaS's GitHub release assets 404 — the working
+mirror is `Heliosoph/midas-small-onnx` on HF; DA-v2 comes from `onnx-community`).
+
+**Engine rule, amended with the user's approval**: core stays numpy+PIL; `depth_ml` is an
+optional accelerator outside the render/sprite/audit path (plan section 2 rule 11).
+
+---
+
+## 2026-10-31 — Entry 15: M6c — undo/redo buttons, icon rail + select tool, view tabs, normal map
+
+**What shipped (all user-driven, in four asks).**
+1. **Undo/redo buttons** in the header (↶ ↷). They call the same `undo()`/`redo()` as
+   ctrl+Z, and a new `syncHist()` keeps them honest: `disabled` when that stack is empty
+   and the depth in the tooltip ("Undo 3 steps (Ctrl+Z)"), refreshed from `pushUndo`,
+   `undo`, `redo` and both history clears.
+2. **Icons on every tool button** (inline SVG, no font/CDN dependency) and a new
+   **select** tool on `V`: `pickMask` walks masks top-down and selects the first visible
+   one under the cursor; ⇧ adds a 3-px square-ring search so fringes stay grabbable;
+   empty art leaves the selection alone and hidden masks are skipped. Pointer handling
+   reads `dataset.tool`, so the SVG children of the buttons are safe under the click
+   handler.
+3. **View tabs** above the stage — masks / depth / normals / anim — replacing M6b's
+   overlay-cycle button (and the `S.view` state with `S.tab`; `D` cycles, ids `#tabs`,
+   `aria-pressed` kept in sync for screen readers). The depth and normals tabs blit the
+   derived PNG full-bleed and are **pan-only** (a brush stroke must never land on a
+   derived view); the anim tab renders on first open (`doRender()` when there is no
+   strip yet) and plays the loop in place, pausing when you leave. `openProject` loads
+   `normal.png` best-effort next to depth/orient, and a project without one shows a
+   "no normal map for this project yet" placeholder.
+4. **`engine/depth.normal_map()`** — the derived tangent-space bump map behind the
+   normals tab: height = palette-snapped luminance (`segment._denoised`), 3×3 box mean
+   (edge-padded: a constant map must stay constant), central differences, unit encode
+   with G up (OpenGL), rounded not truncated so flat art is exactly (128, 128, 255).
+   Server writes `<pid>/normal.png` at upload via a new `_write_art_views()` (also used
+   to **rebuild a missing derived view on first GET**, so pre-M6 projects and the four
+   tracked M1 examples are never stuck on a placeholder) and whitelists it on
+   `GET /api/image/`.
+
+**Measured** (test_m6, 54 checks): flat patch → unique encoded row (128, 128, 255);
+1-px checkerboard dither interior deviates **0 levels** from neutral while a hard step
+reads tilt sd **11.3** (the box mean does the work; palette snapping alone cannot kill a
+2-colour checker); ramp signs per the G-up convention (bright-top → G 119, bright-right →
+R 119); |n|−1 ≤ **0.006** on the courtyard with z ≥ **0.75** (B ≥ 223, nothing faces
+away); courtyard tilt sd 13.8/128 (mostly flat, real relief on edges); deterministic
+byte-for-byte. ui_smoke now runs **104 checks** (16 new: button/history sync, tab cycling +
+first-open render, icon coverage, select pick/ring/hidden/empty); m2–m5 unchanged and
+M2's auto-seg recall still 85.9 % @ ≤60 suggestions.
+
+**Problems hit.** (a) First `_box_mean` had an off-by-one in the integral offsets —
+caught because the constant-map check failed; fixed with edge padding + verified window
+sums. (b) The box-mean smoke test looked like a code bug but was my test art: tiling a
+1-D ramp with `np.tile(a, (1,60,1))` made a (1, 3600, 3) image. (c) jsdom has no canvas
+2-D text, so the tab placeholder crashed the harness on the anim tab before a strip
+exists — `tabPlaceholder` now guards `typeof ctx.fillText` (and mirrors the message to
+the status bar, which is friendlier anyway). (d) The smoke test's render-wait loop read a
+stale frame label left by the anim tab's first-open render; it now clears `tlstat`/`frlbl`
+and waits for the audit line. (e) Select-tool fixtures: the smoke project's *seeded*
+mask is empty and the wand later covers the stroke, so the pick fixture scans the live
+mask data for a pixel whose topmost owner is the stroke and an empty pixel 1–3 px away,
+instead of assuming coordinates.
+
+**Decisions.** The normal map is explicitly a *bump from the art's shading*, not solved
+geometry — documented in plan §2.10, docs §9 rule 10 and a docs troubleshooting bullet
+("almost flat lavender is correct"). M6c's original scope (shading-aware inpaint +
+`relight`) moves to **M6d** and will consume this map.
+
+---
+
+## 2026-10-31 — Entry 14: M6b — the field reaches the editor (overlay, guard, split)
+
+**What shipped.** `D` cycles the canvas overlay art → depth closeness (`depth.png`) →
+surface orientation (`orient.png`, new: wall red / ground green / object blue); both are
+written at upload and loaded with the project. The inspector gains a **surface** select
+(auto / standing / ground plane) stored on the doc and honoured *ahead of* the
+recogniser label in `depth.field`. The wand gains a **depth guard** (rail button cycles
+off/2/4/8 rows, `dguard` on /api/wand): the flood may not leave the seed's ground-row
+band. **split @depth** arrives twice: as an edge op (`/api/edge op=depthsplit` → pieces,
+the editor keeps piece 1 and spawns the rest as masks) and as an auto-seg setting
+(`depth_split`, default on in the UI, off in engine DEFAULTS so M2's measured recall
+stays the baseline). Acceptance: test_m6 43 checks, ui_smoke 89 checks; m2–m5 unchanged.
+
+**Measured.** Guard, synthetic iso room (wall and floor are one hue family on purpose,
+joined by a teal drainpipe as the leak path): unguarded hue flood at tol 60 puts >200 px
+below the junction, `dguard=4` keeps it under 20 and is byte-identical to the old wand
+when off. Courtyard seed (60,100) tol 60: unguarded 16 960 px down to row 259; guarded
+3 095 px stopping at row 229 — the junction at that column is 225, i.e. the guard stops
+exactly where the surface changes. Split, synthetic vine-on-wall + stem + bush-on-floor
+as ONE connected green blob: auto-seg without the split returns one suggestion covering
+96% of it; with the split, two suggestions (41% / 35%) each confined to its own surface
+(rows 19–55 and 58–86, junction 58). Courtyard: recall identical with the split on and
+off (85.9%, 60 suggestions) — nothing fuses there, and the field costs +0.4 s.
+
+**The insight that reshaped the op.** `base_y` is *continuous* across the wall/floor
+junction by construction: a wall pixel's ground row **is** the junction row, so the first
+cut rule (break where neighbour base_y jumps) found nothing at the junction — the first
+M6b run split zero masks and the synthetic check failed loudly. The discrete signal is
+the orientation *label*: `depth.surface_edges` (wall meets ground) is the cut line, with
+base_y jumps kept for the case they do fire (an object's feet against the surface behind
+it, a step between wall faces). Documented in plan §10 with the honest limit: two
+objects on the *same* surface share one ground plane, so splitting those belongs to
+Phase-2 recomposition, not M6.
+
+**Bug of the entry.** The new rail button took `id="view"` — the canvas's id. In a
+browser the rail button wins `getElementById` (document order), so `ctx =
+canvas.getContext('2d')` threw at boot; jsdom reported it as "canvas.getContext is not a
+function" and ui_smoke died with zero checks run, which is exactly why the smoke test
+boots the real page. Renamed to `oview`. Lesson kept: single-file UI means one global id
+namespace — new ids get a prefix from now on.
+
+**Next.** M6c (shading-aware inpaint from orientation + inferred light, optional
+`relight` clip), then Phase 2 recomposition.
+
+---
+
+## 2026-10-31 — Entry 13: M6a — depth & surface-orientation field in the engine
+
+**What shipped.** New `app/engine/depth.py`: a per-pixel ground-row field
+(`base_y`, `orient` NONE/GROUND/WALL/OBJECT, `depth` = the origin's uint8 closeness
+map, `horizon`), computed at upload (it depends on the art alone) and served as
+`<pid>/depth.png` via `GET /api/image/<pid>/depth.png`. The z sort key is corrected
+to iso closeness **at the feet** (`2*base_y`): `imaging.stats_of`, `depth.object_key`
+and the index.html `maskStats` mirror now agree, and a tall object no longer jumps
+the queue in front of a short one standing on the same ground row (old key on the
+test's counterexample: 155.2 vs 145.0 — tall wrongly first; new key: 140.0 vs 140.0).
+Acceptance: `app/tests/test_m6.py` (27 checks), dev probe `app/tests/depth_probe.py`
+(writes `app/tests/depth_debug.png`). m2–m5 + ui_smoke unchanged, all green.
+
+**The junction, not the colour classes.** First attempt ported the origin's vertical-
+surface rules as component geometry tests (vertical sides + straight base line). It
+found *zero* walls on the courtyard, and the diagnostic showed why: wall and floor
+are the **same colour classes** here (both teal tilework; `classify` puts both in
+'water'), and each class fragments into lace across the other, so no per-class
+component ever forms a wall silhouette. The portable signal is geometric instead:
+the top row of the *floor sheet* — the horizontal stone/ground/shadow band at the
+wall base — is the wall/floor junction per column (courtyard: median row 213,
+p10–p90 192–228). WALL = plate material above it, per-column base_y = the junction
+row (the origin's per-column-bottom rule, expressed on a portable line); uncovered
+columns are interpolated and the line median-smoothed (strided NaN-median, ~30 ms,
+instead of the origin's python double loop).
+
+**Problems hit + fixes.** (1) Tile outlines and cast-shadow specks are not plate
+classes, so a wall came out of the class step as lace (erode-5 left 1.7k of 48k px)
+→ two 5×5 box-majority passes close surfaces; NONE then inherits base_y from its
+neighbours (106 px left unlabelled on the courtyard). (2) `np.where(mask, rows,
+nan).min(0)` is all-NaN per column — NaN propagates through min; sentinel row +
+convert afterwards. (3) the floor-sheet component min size must scale with the frame
+(0.2%): a fixed 500 px found nothing on the 96×128 synthetic room, where objects
+standing in the band cut it into ~150 px pieces. (4) `3*base_y − centroid` looked
+like the origin formula averaged over the body; it is the feet formula with the
+wrong y — documented as §2.9 rather than silently changed.
+
+**Measured and rejected: fill axis from orientation.** The obvious consumer — holes
+in a wall fill top-to-bottom, holes in a floor keep M4 — was prototyped and measured
+with punch-hole reconstruction error (boxes punched into clean surface, refilled,
+compared to the art underneath): wall holes h=30.85 / m4=24.34 / v=24.58, floor holes
+h=44.23 / m4=34.51 / v=34.46. Vertical fill does **not** beat M4 on walls: tilework
+is patterned in both axes and a lerp reconstructs pattern on neither, so the axis
+choice moves the error by noise. `animate.inpaint` is untouched; `depth.hole_axis`
+stays for M6b/c, and M6c's shading-aware inpaint (orientation + inferred light
+direction) is the version of the idea worth building. Numbers reproducible via
+`python3 app/tests/depth_probe.py`.
+
+**Faithful-port check.** Courtyard field vs the origin `depth.npy`: spearman ρ=0.556
+(rank agreement; the origin map additionally carries per-component wall structure the
+single-junction-line model deliberately drops), field cost 245 ms on 384×512 — inside
+the M5 budget share, cached implicitly because upload computes it once.
+
+**Next.** M6b: overlay toggle in the canvas, per-region surface type in the
+inspector, split-at-depth-break edge op, depth-aware wand. Then M6c, then Phase 2.
 
 ---
 

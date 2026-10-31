@@ -218,7 +218,8 @@ def grow_core(m, bbox, r=2, erode_back=1, max_ratio=3.0):
 # ---------------------------------------------------------------- wand
 
 
-def wand(nat, y, x, tol=30, conn=8, snap=0, smooth=True, mode='hue'):
+def wand(nat, y, x, tol=30, conn=8, snap=0, smooth=True, mode='hue',
+         base_y=None, dguard=0):
     """Magic wand from native pixel (y, x). `tol` is the tolerance slider value (0..128).
 
     mode='hue' (default) — hue-family flood: a pixel joins if its circular hue distance to
@@ -235,6 +236,12 @@ def wand(nat, y, x, tol=30, conn=8, snap=0, smooth=True, mode='hue'):
       palette-snapped image (`snap` colours, 0 = raw). Precise on clean palettes, useless on
       dither; kept because it is what people expect from other tools.
     smooth  morphological close + hole-fill, so the grab is not swiss cheese.
+    base_y, dguard (M6b)  depth guard: with a ground-row field from engine/depth and
+      dguard > 0, the flood may not leave the seed's ground-row band (|base_y -
+      base_y[seed]| <= dguard rows). Colour floods leak along shared materials; a
+      ground-row jump is a surface boundary, so this stops the wand at the wall/floor
+      junction and at object feet without touching tolerance. dguard=0 keeps M2's
+      measured behaviour exactly.
     """
     H, W = nat.shape[:2]
     if not (0 <= y < H and 0 <= x < W):
@@ -245,13 +252,22 @@ def wand(nat, y, x, tol=30, conn=8, snap=0, smooth=True, mode='hue'):
             idx, pal = quantize(a, snap)
             a = pal[idx].astype(np.int16)
         seed = a[y, x]
-        m = scanline_flood((np.abs(a - seed[None, None, :]).max(axis=2)) <= max(0, int(tol)),
-                           [(y, x)], conn)
+        ok = (np.abs(a - seed[None, None, :]).max(axis=2)) <= max(0, int(tol))
+        ok = _depth_guard(ok, base_y, y, x, dguard)
+        m = scanline_flood(ok, [(y, x)], conn)
         if smooth:
             m = holefill(close4(m, 1))
     else:
-        m = _hue_wand(a, y, x, max(0, int(tol)), conn, smooth)
+        m = _hue_wand(a, y, x, max(0, int(tol)), conn, smooth, base_y, dguard)
     return m
+
+
+def _depth_guard(ok, base_y, y, x, dguard):
+    """Intersect a flood predicate with the seed's ground-row band (M6b)."""
+    if not dguard or base_y is None:
+        return ok
+    b = np.asarray(base_y, np.float32)
+    return ok & (np.abs(b - b[y, x]) <= float(dguard))
 
 
 _HUE_SAT_MIN = 0.30
@@ -260,7 +276,7 @@ _LEAK_FRAC = 0.12          # >12% of the frame means "shared material" -> tighte
 _LEAK_STEPS = (2.0, 1.5, 1.0)
 
 
-def _hue_wand(a, y, x, tol, conn=8, smooth=True):
+def _hue_wand(a, y, x, tol, conn=8, smooth=True, base_y=None, dguard=0):
     hue, sat, val = hsv_maps(a)
     if sat[y, x] < _HUE_SAT_MIN or val[y, x] < _HUE_VAL_MIN:
         # clicked a shadow or a highlight: step to the nearest chromatic pixel first
@@ -272,6 +288,7 @@ def _hue_wand(a, y, x, tol, conn=8, smooth=True):
     dh = np.abs(hue - hue[y, x])
     dh = np.minimum(dh, 360.0 - dh)
     fam = (dh <= tol) & (sat >= _HUE_SAT_MIN) & (val >= _HUE_VAL_MIN)
+    fam = _depth_guard(fam, base_y, y, x, dguard)
 
     def finish(mask):
         return holefill(close4(mask, 1)) if smooth else mask
@@ -457,13 +474,18 @@ def bbox_of(m):
 
 
 def stats_of(m):
-    """{'px', 'bbox', 'depth'} — depth = iso sort key 3*base_y - y (plan §8)."""
+    """{'px', 'bbox', 'depth'} — depth = iso sort key at the object's feet (plan §8).
+
+    M6a: the key is the closeness formula 3*base_y - y evaluated where the object
+    *stands* (y == base_y), i.e. 2*base_y — see engine/depth.object_key. The old
+    mean-closeness key (3*base_y - centroid) ranked a tall palm in front of a short
+    pot on the same ground row; the client mirror in index.html maskStats matches.
+    """
     ys, xs = np.nonzero(m)
     px = int(len(ys))
     if not px:
         return {'px': 0, 'bbox': None, 'depth': 0.0}
     base_y = float(np.percentile(ys, 97))
-    cy = float(ys.mean())
     return {'px': px,
             'bbox': (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())),
-            'depth': round(3.0 * base_y - cy, 1)}
+            'depth': round(2.0 * base_y, 1)}

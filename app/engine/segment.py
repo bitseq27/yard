@@ -26,6 +26,7 @@ import time
 
 import numpy as np
 
+from . import depth as dep
 from . import imaging as im
 from . import recognise as rec
 
@@ -80,6 +81,8 @@ DEFAULTS = dict(
     region_reserve=4,      # suggestion slots kept for plate material (walkmask/regions)
     include_regions=True,  # UI toggle: offer plate material alongside recognised objects
     recognise=True,        # UI toggle: name suggestions by recognised object type
+    depth_split=False,     # M6b: split a fused suggestion at ground-row jumps (the
+    depth_split_thresh=3,  # cut line plan §8 used to leave to the user)
     min_suggestions_cap=200,
 )
 
@@ -480,6 +483,23 @@ def auto_segment(a, max_suggestions=60, cfg=None, conn=8):
                 'carpet': d['min_carpet_px'], 'lily_pad': d['min_pad_px'],
                 'fringe': 6, 'water': min_region}
     cores = [c for c in cores if c[3] >= kind_min.get(c[0], 1)]
+
+    # ---- M6b: two same-colour objects at different depths fuse into one colour-class
+    # component; the ground-row jump between them is the cut line, so split there and
+    # let the pieces compete for slots as the separate objects they are.
+    if d['depth_split']:
+        fld = dep.field(a)
+        by, ori = fld['base_y'], fld['orient']
+        split = []
+        for base, m, bbox, px, nfrag in cores:
+            pieces = dep.split_pieces(m, by, d['depth_split_thresh'],
+                                      kind_min.get(base, 1), orient=ori)
+            if len(pieces) >= 2:
+                split.extend((base, pm, im.bbox_of(pm), int(pm.sum()), 1)
+                             for pm in pieces)
+            else:
+                split.append((base, m, bbox, px, nfrag))
+        cores = split
 
     # ---- cap: objects first (the point of auto-seg); over-cap candidates are absorbed
     # into their nearest same-kind neighbour rather than dropped (see _fit_to_cap).

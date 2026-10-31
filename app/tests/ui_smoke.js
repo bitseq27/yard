@@ -113,6 +113,7 @@ async function main() {
 
   for (let i = 0; i < 80 && !(win.__PS && win.__PS.meta); i++) await wait(100);
   const S = win.__PS;
+  const PV = win.__PV || {};
   for (let i = 0; i < 80 && doc.querySelectorAll('#list .row').length < 1; i++) await wait(100);
   check('editor booted and opened the project', !!S && !!S.meta && S.meta.id === meta.id,
     S ? `project ${S.meta && S.meta.id}` : 'no __PS');
@@ -139,6 +140,48 @@ async function main() {
   pev('pointerdown', 62, 62); pev('pointermove', 66, 64); pev('pointerup', 66, 64);
   check('eraser removed pixels', S.masks[1].px < before, `${before} -> ${S.masks[1].px}`);
 
+  // ---- M6c: icons + the select tool ---------------------------------------
+  const toolBtns = [...doc.querySelectorAll('#rail .tool')];
+  check('every tool button carries an inline SVG icon',
+    toolBtns.length >= 7 && toolBtns.every(b => b.querySelector('svg') && b.dataset.tool),
+    `${toolBtns.filter(b => b.querySelector('svg')).length}/${toolBtns.length} with icons`);
+  check('the rail offers a select tool', !!doc.querySelector('#rail .tool[data-tool="select"]'));
+  key('v');
+  check('V switches to the select tool', S.tool === 'select', S.tool);
+  const topAt = (x, y) => { for (let i = S.masks.length - 1; i >= 0; i--)
+    if (S.masks[i].visible !== false && S.masks[i].data[y * S.W + x]) return i; return -1; };
+  const near1 = (x, y) => { for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+    const xx = x + dx, yy = y + dy;
+    if (xx >= 0 && yy >= 0 && xx < S.W && yy < S.H && S.masks[1].data[yy * S.W + xx]) return true;
+  } return false; };
+  // the seeded mask of this project is empty, so the stroke we just drew is the target
+  let pick = null, miss = null;
+  for (let y = 0; y < S.H && !(pick && miss); y++)
+    for (let x = 0; x < S.W; x++) {
+      if (!pick && topAt(x, y) === 1) pick = { x, y };
+      else if (!miss && topAt(x, y) === -1 && near1(x, y)) miss = { x, y };
+      if (pick && miss) break;
+    }
+  check('found a painted pixel and an empty one 1-3px away', !!pick && !!miss,
+    `painted=${pick && pick.x},${pick && pick.y} empty=${miss && miss.x},${miss && miss.y}`);
+  const at = p => [Math.round(S.ox + (p.x + 0.5) * S.zoom), Math.round(S.oy + (p.y + 0.5) * S.zoom)];
+  S.sel = 0;
+  pev('pointerdown', ...at(pick)); pev('pointerup', ...at(pick));
+  check('the select tool picks the mask under the cursor', S.sel === 1 &&
+    doc.getElementById('iName').value === 'mask 2',
+    `sel=${S.sel} name="${doc.getElementById('iName').value}"`);
+  S.sel = 0;
+  pev('pointerdown', ...at(miss)); pev('pointerup', ...at(miss));
+  check('a plain click on empty art changes nothing', S.sel === 0, `sel=${S.sel}`);
+  pev('pointerdown', ...at(miss), { shiftKey: true }); pev('pointerup', ...at(miss), { shiftKey: true });
+  check('shift-click ring-searches the 3px neighbourhood', S.sel === 1, `sel=${S.sel}`);
+  S.masks[1].visible = false; S.sel = 0;
+  pev('pointerdown', ...at(pick)); pev('pointerup', ...at(pick));
+  check('a hidden mask is not pickable', S.sel === 0, `sel=${S.sel}`);
+  S.masks[1].visible = true; S.sel = 1;
+  key('b');
+  check('B leaves the select tool for the brush', S.tool === 'brush', S.tool);
+
   // ---- rect + lasso + undo -------------------------------------------------
   key('r');
   pev('pointerdown', 200, 200); pev('pointermove', 220, 215); pev('pointerup', 220, 215);
@@ -151,6 +194,20 @@ async function main() {
   const preUndo = S.masks[1].px;
   key('z', { ctrlKey: true });
   check('undo restores the mask', S.masks[1].px === afterRect, `${preUndo} -> ${S.masks[1].px}`);
+  // M6c: the same history is reachable from header buttons, not just ctrl+Z
+  const hundo = doc.getElementById('hundo'), hredo = doc.getElementById('hredo');
+  check('header carries undo + redo buttons', !!hundo && !!hredo &&
+    hundo.title.toLowerCase().includes('undo') && hredo.title.toLowerCase().includes('redo'),
+    `undo="${hundo && hundo.title}" redo="${hredo && hredo.title}"`);
+  hredo.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  check('redo button replays the lasso', S.masks[1].px === preUndo,
+    `${S.masks[1].px} vs ${preUndo}`);
+  hundo.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  check('undo button steps back again', S.masks[1].px === afterRect, `${S.masks[1].px}`);
+  check('undo/redo buttons mirror the history depth',
+    hundo.disabled === !S.undo.length && hredo.disabled === !S.redo.length &&
+    hundo.title.includes(`${S.undo.length} step`) && hredo.title.includes('1 step'),
+    `undo=${S.undo.length} redo=${S.redo.length} "${hundo.title}" / "${hredo.title}"`);
 
   // ---- wand ----------------------------------------------------------------
   key('w');
@@ -179,6 +236,65 @@ async function main() {
   const docj = await (await fetch(BASE + '/api/project/' + meta.id)).json();
   check('server doc has both masks', docj.objects.length === 2,
     docj.objects.map(o => `${o.id}:${o.px}`).join(', '));
+
+  // ---- M6c: view tabs (art / depth / normals / animation) ------------------
+  const tabBtn = v => doc.querySelector(`#tabs button[data-tab="${v}"]`);
+  check('the derived views load with the project',
+    !!S.depthImg && !!S.orientImg && !!S.normalImg,
+    `depth=${!!S.depthImg} orient=${!!S.orientImg} normal=${!!S.normalImg}`);
+  const pingj = await (await fetch(BASE + '/api/ping')).json();
+  check('ping reports the depth-pass source', typeof pingj.depth_ml === 'string',
+    pingj.depth_ml);
+
+  check('tab bar replaces the old overlay cycle button', !!doc.getElementById('tabs') &&
+    !doc.getElementById('oview') && ['masks', 'depth', 'normals', 'anim'].every(v => !!tabBtn(v)),
+    `tabs=${doc.querySelectorAll('#tabs button').length}`);
+  check('the active tab is marked for screen readers',
+    tabBtn('masks').getAttribute('aria-pressed') === 'true' &&
+    tabBtn('depth').getAttribute('aria-pressed') === 'false');
+  key('d');
+  check('D cycles to the depth tab', S.tab === 'depth' &&
+    tabBtn('depth').getAttribute('aria-pressed') === 'true', S.tab);
+  if (pingj.depth_ml && pingj.depth_ml !== 'parse-only') {
+    for (let i = 0; i < 80 && !S.depthMlImg; i++) await wait(100);
+    check('model-fused depth loaded for the depth tab', !!S.depthMlImg,
+      `${!!S.depthMlImg} (${pingj.depth_ml})`);
+  }
+  key('d');
+  check('D cycles on to the normals tab', S.tab === 'normals' &&
+    tabBtn('normals').getAttribute('aria-pressed') === 'true', S.tab);
+  key('d');
+  for (let i = 0; i < 80 && !PV.strip; i++) await wait(100);
+  check('D cycles to the animation tab (and it renders on first open)',
+    S.tab === 'anim' && !!PV.strip && PV.N > 0,
+    `tab=${S.tab} strip=${!!PV.strip} frames=${PV.N}`);
+  tabBtn('masks').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  check('clicking a tab switches back to the masks', S.tab === 'masks' &&
+    tabBtn('masks').getAttribute('aria-pressed') === 'true' &&
+    tabBtn('masks').classList.contains('on') && !tabBtn('anim').classList.contains('on'), S.tab);
+
+  // ---- M6b: wand guard, surface select, split ------------------------------
+  const guardBtn = doc.getElementById('dguard');
+  check('rail carries the depth-guard button', !!guardBtn);
+  guardBtn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  check('guard cycles to 2 rows', S.dguard === 2 && guardBtn.textContent === 'guard 2',
+    `guard=${S.dguard}`);
+  for (let i = 0; i < 3; i++) guardBtn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  check('guard cycles back off', S.dguard === 0 && guardBtn.textContent === 'guard off');
+  doc.querySelectorAll('#list .row')[0].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  const surf = doc.getElementById('iSurf');
+  check('inspector offers a surface select', !!surf && surf.options.length === 3,
+    surf ? `${surf.options.length} options` : 'missing');
+  check('inspector offers split @depth', !!doc.querySelector('#insp [data-edge=depthsplit]'));
+  surf.value = 'wall';
+  surf.dispatchEvent(new win.Event('change', { bubbles: true }));
+  check('surface lands on the mask', S.masks[0].surface === 'wall', S.masks[0].surface);
+  key('s', { ctrlKey: true });
+  for (let i = 0; i < 60 && S.dirty.size; i++) await wait(100);
+  const docjM6 = await (await fetch(BASE + '/api/project/' + meta.id)).json();
+  check('surface round-trips to the server doc',
+    (docjM6.objects.find(o => o.id === 'seed1') || {}).surface === 'wall',
+    JSON.stringify((docjM6.objects.find(o => o.id === 'seed1') || {}).surface));
 
   // ---- auto-seg: grouped choose-list, settings, preview, import ------------
   key('a');
@@ -232,7 +348,7 @@ async function main() {
   check('modal closed after import', !doc.getElementById('modal').classList.contains('on'));
 
   // ---- M3: anim inspector, timeline, render + exports ----------------------
-  check('badge shows M5', /M5/.test(doc.querySelector('.badge').textContent));
+  check('badge shows M6', /M6/.test(doc.querySelector('.badge').textContent));
   check('docs button links to /docs', !!doc.getElementById('docsbtn') &&
     doc.getElementById('docsbtn').getAttribute('href') === '/docs');
   {
@@ -280,9 +396,12 @@ async function main() {
   const saved = docj2.objects.find(o => o.id === S.masks[iSel].id);
   check('anim + params persist to the doc', saved && saved.anim === 'sway' &&
     saved.params && saved.params.amp === 2, JSON.stringify(saved && saved.params));
-  // render -> strip plays in the timeline
+  // render -> strip plays in the timeline (clear the labels first: the anim tab
+  // already rendered once, so a stale label would end the wait early)
+  doc.getElementById('tlstat').textContent = '';
+  doc.getElementById('frlbl').textContent = '';
   click('render');
-  for (let i = 0; i < 120 && !/\d+\/\d+/.test(doc.getElementById('frlbl').textContent); i++)
+  for (let i = 0; i < 120 && !/stray px/.test(doc.getElementById('tlstat').textContent); i++)
     await wait(150);
   const frlbl = doc.getElementById('frlbl').textContent;
   check('render produced a playable strip', /\/48/.test(frlbl), frlbl);

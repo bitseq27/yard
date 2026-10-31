@@ -31,6 +31,17 @@
           background:#262630; color:var(--dim); font:inherit; cursor:pointer; font-size:14px; }
   .tool:hover { background:#30303c; color:var(--txt); }
   .tool.on { background:#2f4a3f; border-color:var(--acc); color:#c9f5e2; }
+  .tool svg { display:block; margin:0 auto; width:17px; height:17px; }
+  /* M6c: view tabs above the stage */
+  #tabs { position:absolute; top:8px; left:50%; transform:translateX(-50%);
+          display:flex; gap:2px; z-index:5; background:#17171d; border:1px solid var(--line);
+          border-radius:8px; padding:2px; }
+  #tabs button { border:0; background:transparent; color:var(--dim); font:inherit;
+          font-size:11px; padding:4px 10px; border-radius:6px; cursor:pointer;
+          display:flex; gap:5px; align-items:center; }
+  #tabs button:hover { color:var(--txt); background:#262630; }
+  #tabs button.on { background:#2f4a3f; color:#c9f5e2; }
+  #tabs svg { width:13px; height:13px; }
   .railsep { width:100%; height:1px; background:var(--line); margin:3px 0; }
   .raillbl { color:var(--dim); font-size:10px; writing-mode:horizontal-tb; text-align:center; }
   #rail input[type=range] { width:38px; writing-mode:vertical-lr; direction:rtl; height:74px; }
@@ -151,9 +162,11 @@
 </head>
 <body>
 <header>
-  <div class="brand">Pixel Sway <span class="badge">M5</span></div>
+  <div class="brand">Pixel Sway <span class="badge">M6</span></div>
   <label class="btn">Load image<input type="file" id="file" accept="image/*" hidden></label>
   <select id="recent" class="btn" title="Recent projects"><option value="">projects…</option></select>
+  <button class="btn" id="hundo" title="Undo (Ctrl+Z)">↶</button>
+  <button class="btn" id="hredo" title="Redo (Ctrl+Shift+Z)">↷</button>
   <button class="btn" id="prename" title="Rename project">✎</button>
   <button class="btn" id="pdup" title="Duplicate project">⧉</button>
   <button class="btn" id="pdel" title="Delete project">🗑</button>
@@ -165,12 +178,27 @@
 </header>
 <main>
   <aside id="rail">
-    <button class="tool on" data-tool="brush" title="Brush (B)">B</button>
-    <button class="tool" data-tool="eraser" title="Eraser (E)">E</button>
-    <button class="tool" data-tool="rect" title="Rect fill (R)">R</button>
-    <button class="tool" data-tool="lasso" title="Lasso (L)">L</button>
-    <button class="tool" data-tool="wand" title="Magic wand (W)">W</button>
-    <button class="tool" data-tool="pan" title="Pan (H / space / middle-drag)">H</button>
+    <button class="tool" data-tool="select" title="Select mask under the cursor (V)">
+      <svg viewBox="0 0 16 16" fill="currentColor" stroke="none"><path d="M4 1.5 12.6 9l-3.7.5 2 4.6-2 .9-2-4.6L4 13Z"/></svg>
+    </button>
+    <button class="tool on" data-tool="brush" title="Brush (B)">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M9.6 3.4l3 3L6.4 12.6c-.8.8-2 .9-2.9.4.5-.9.4-2.1-.3-2.8Z"/><path d="M11 2l1.2-1.2 3 3L14 5Z"/></svg>
+    </button>
+    <button class="tool" data-tool="eraser" title="Eraser (E)">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M6.5 12.5 3 9l6-6 4 4-5.5 5.5Z"/><path d="M2.5 14h11"/><path d="M6.5 12.5h4"/></svg>
+    </button>
+    <button class="tool" data-tool="rect" title="Rect fill (R)">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="3 2"><rect x="2.7" y="3.7" width="10.6" height="8.6"/></svg>
+    </button>
+    <button class="tool" data-tool="lasso" title="Lasso (L)">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><ellipse cx="8" cy="6" rx="5.4" ry="4"/><path d="M8 10v2.2l2.4 1.3"/></svg>
+    </button>
+    <button class="tool" data-tool="wand" title="Magic wand (W)">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 13.5 9.5 6.5"/><path d="M11 2v2.4M9.8 3.2h2.4M13.5 5.5v2.4M12.3 6.7h2.4M10.6 4.4l1.2 1.2"/></svg>
+    </button>
+    <button class="tool" data-tool="pan" title="Pan (H / space / middle-drag)">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 1.8v12.4M1.8 8h12.4"/><path d="M6 3.8 8 1.8l2 2M6 12.2l2 2 2-2M3.8 6 1.8 8l2 2M12.2 6l2 2-2 2"/></svg>
+    </button>
     <div class="railsep"></div>
     <div class="raillbl">nib</div>
     <input type="range" id="nib" min="1" max="16" value="3" title="Brush size ([ ])">
@@ -185,8 +213,23 @@
     <button class="btn on" id="wmode" title="Wand metric: hue-family (dither-proof) or
       classic seed-colour tolerance">hue</button>
     <button class="btn" id="snap" title="Palette-snap first (seed metric only)">snap</button>
+    <button class="btn" id="dguard" title="Wand depth guard (M6b): the flood may not
+      leave the seed's ground-row band, so it stops at the wall/floor junction and at
+      object feet. Cycles off/2/4/8 rows.">guard off</button>
   </aside>
   <div id="stage">
+    <div id="tabs">
+      <button data-tab="masks" class="on" aria-pressed="true" title="Mask editing on the art (D cycles tabs)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 2 14 5 8 8 2 5Z"/><path d="M2 8l6 3 6-3M2 11l6 3 6-3"/></svg>masks</button>
+      <button data-tab="depth" aria-pressed="false" title="Ground-row closeness map (M6a): bright = near">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="11" height="11"/><path d="M2.5 11l4-3 3 2 4-4"/></svg>depth</button>
+      <button data-tab="normals" aria-pressed="false" title="Derived tangent-space normal map (bump from the
+        palette-snapped shading)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.5a3.5 3.5 0 0 1 0 7"/></svg>normals</button>
+      <button data-tab="anim" aria-pressed="false" title="Rendered loop, playing in place (renders on first
+        open if needed)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M5 3.5 12 8l-7 4.5Z"/></svg>anim</button>
+    </div>
     <canvas id="view"></canvas>
     <div id="hint">No image loaded.<br>Drop a pixel-art PNG here, or click “Load image”.<br>
       The editor works at the art’s native pixel grid.</div>
@@ -251,6 +294,9 @@
         <label>offer regions too</label><input type="checkbox" id="asRegions">
         <label>auto-run on load</label><input type="checkbox" id="asOnload">
         <label>recognise objects</label><input type="checkbox" id="asRecog">
+        <label>split at depth breaks</label><input type="checkbox" id="asSplit"
+          title="M6b: cut a fused suggestion where the ground row jumps — two
+          same-colour objects at different depths become two suggestions">
         <label></label><span class="stat">naming: recognised label vs material class</span>
       </div>
       <div class="btns"><button class="btn" id="asReset">reset defaults</button>
@@ -273,7 +319,11 @@
 <div id="help">
   <div id="helpbox">
     <h3>Keyboard shortcuts</h3>
-    <div><span class="k">B E R L W H</span> brush · eraser · rect · lasso · wand · pan</div>
+    <div><span class="k">V B E R L W H</span> select · brush · eraser · rect · lasso ·
+      wand · pan</div>
+    <div><span class="k">D</span> cycle view tabs: masks → depth (model-fused when the
+      server has a depth model) → normals → anim</div>
+    <div><span class="k">↶ </span> undo / redo buttons (or Ctrl+Z / Ctrl+Shift+Z)</div>
     <div><span class="k">N / A</span> new mask · auto-seg</div>
     <div><span class="k">[ ]</span> nib smaller / bigger &nbsp; <span class="k">+ − 0 1 2</span> zoom</div>
     <div><span class="k">Ctrl+Z / ⇧Z</span> undo / redo &nbsp; <span class="k">Ctrl+D</span> duplicate mask</div>
@@ -304,6 +354,8 @@ const S = {
   masks: [],            // z order == array order
   sel: -1,
   tool: 'brush', nib: 3, tol: 30, conn: 8, snap: false, wmode: 'hue', add: true,
+  dguard: 0, tab: 'masks', depthImg: null, depthMlImg: null, orientImg: null,
+  normalImg: null, mlTried: false,
   zoom: 2, ox: 0, oy: 0, dpr: 1,
   dirty: new Set(), docDirty: false,
   undo: [], redo: [],
@@ -412,13 +464,15 @@ function maskStats(m) {
   if (!px) return { px: 0, bbox: null, depth: 0 };
   ys.sort((a, b) => a - b);
   const base = ys[Math.floor(ys.length * 0.97)];
-  return { px, bbox: [x0, y0, x1, y1], depth: +(3 * base - sy / px).toFixed(1) };
+  // M6a: iso sort key at the object's feet (engine/depth.object_key), not mean-closeness
+  return { px, bbox: [x0, y0, x1, y1], depth: +(2 * base).toFixed(1) };
 }
 function makeMask(opts) {
   const m = Object.assign({
     id: null, name: 'mask', kind: 'object', color: nextColor(S.masks.length),
     label: '', conf: 0, anim: 'static', anim_hint: '', params: {},
     visible: true, data: new Uint8Array(S.W * S.H), nfrag: 1, px: 0, bbox: null, depth: 0,
+    surface: '',
   }, opts);
   m.canvas = document.createElement('canvas');
   m.canvas.width = S.W; m.canvas.height = S.H;
@@ -466,6 +520,29 @@ function drawRim(m) {          // 1px white rim on the selection (native res)
         !(y && d[i - W]) || !(y < H - 1 && d[i + W])) octx.fillRect(x, y, 1, 1);
   }
 }
+function tabPlaceholder(msg) {
+  setStatus(msg);
+  if (typeof ctx.fillText !== 'function') return;   // jsdom has no 2d text
+  ctx.fillStyle = '#8a8a95';
+  ctx.font = '13px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(msg, canvas.width / 2, canvas.height / 2);
+  ctx.textAlign = 'start';
+}
+/* M6e: the fused depth map is built in a server background thread after upload,
+   so it is fetched lazily (open + first visit to the depth tab) and a missing one
+   simply leaves the parse map on screen. */
+async function fetchDepthMl() {
+  if (!S.meta || S.depthMlImg || S.mlTried) return;
+  S.mlTried = true;
+  try {
+    const rb = await (await fetch(`/api/image/${S.meta.id}/depth_ml.png`)).blob();
+    if (!rb.type.startsWith('image')) return;
+    S.depthMlImg = await createImageBitmap(rb);
+    if (S.tab === 'depth') { draw(); setStatus('depth tab: model-fused closeness ' +
+      '(monocular layout + parse), bright = near'); }
+  } catch (e) { /* parse-only server, or still fusing */ }
+}
 function markDirty(m) { S.dirty.add(m); scheduleSave(); }
 function selMask() { return S.masks[S.sel] || null; }
 
@@ -485,6 +562,26 @@ function draw() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (!S.img) return;
   const w = S.W * S.zoom, h = S.H * S.zoom;
+  if (S.tab === 'depth') {                          // M6c tabs: derived maps full-bleed
+    // M6e: prefer the model-fused map when the server could make one
+    if (S.depthMlImg) ctx.drawImage(S.depthMlImg, S.ox, S.oy, w, h);
+    else if (S.depthImg) ctx.drawImage(S.depthImg, S.ox, S.oy, w, h);
+    else tabPlaceholder('no depth field for this project yet');
+    return;
+  }
+  if (S.tab === 'normals') {
+    if (S.normalImg) ctx.drawImage(S.normalImg, S.ox, S.oy, w, h);
+    else tabPlaceholder('no normal map for this project yet');
+    return;
+  }
+  if (S.tab === 'anim') {
+    if (PV.strip && PV.N) {
+      const f = ((PV.cur % PV.N) + PV.N) % PV.N;
+      const r = Math.floor(f / PV.cols), cc = f % PV.cols;
+      ctx.drawImage(PV.strip, cc * PV.fw, r * PV.fh, PV.fw, PV.fh, S.ox, S.oy, w, h);
+    } else tabPlaceholder('nothing rendered yet — rendering…');
+    return;
+  }
   ctx.drawImage(S.img, S.ox, S.oy, w, h);
   ctx.drawImage(overlay, S.ox, S.oy, w, h);
   if (S.sgPreview != null && sgCache[S.sgPreview]) {   // auto-seg row preview
@@ -564,6 +661,18 @@ function pushUndo(m) {
   S.undo.push({ m, data: m.data.slice() });
   if (S.undo.length > 30) S.undo.shift();
   S.redo.length = 0;
+  syncHist();
+}
+/* M6c: the header buttons mirror the keyboard history, so a mouse-only user can
+   see how deep the undo stack is and that redo is empty. */
+function syncHist() {
+  const u = $('hundo'), r = $('hredo');
+  if (!u || !r) return;
+  u.disabled = !S.undo.length;
+  r.disabled = !S.redo.length;
+  const n = k => `${k} step${k === 1 ? '' : 's'}`;
+  u.title = S.undo.length ? `Undo ${n(S.undo.length)} (Ctrl+Z)` : 'Nothing to undo (Ctrl+Z)';
+  r.title = S.redo.length ? `Redo ${n(S.redo.length)} (Ctrl+Shift+Z)` : 'Nothing to redo (Ctrl+Shift+Z)';
 }
 function applyBool(m, maskArr, add) {     // maskArr: Uint8Array region from server/rect/lasso
   pushUndo(m);
@@ -606,6 +715,12 @@ canvas.addEventListener('pointerdown', e => {
   if (!S.img) return;
   canvas.setPointerCapture(e.pointerId);
   const p = toNative(e);
+  if (S.tab !== 'masks') {                    // derived views: drag pans, nothing edits
+    stroke = { kind: 'pan', x: e.clientX, y: e.clientY };
+    canvas.classList.add('panning');
+    return;
+  }
+  if (S.tool === 'select' && e.button === 0) { pickMask(p, e.shiftKey); return; }
   const pan = S.tool === 'pan' || e.button === 1 || spaceDown;
   if (pan) { stroke = { kind: 'pan', x: e.clientX, y: e.clientY }; canvas.classList.add('panning'); return; }
   if (e.button !== 0) return;
@@ -676,6 +791,40 @@ stage.addEventListener('wheel', e => {
   setZoom(S.zoom * (e.deltaY < 0 ? 1.25 : 1 / 1.25), e.clientX - r.left, e.clientY - r.top);
 }, { passive: false });
 
+/* ------------------------------------------------------------------ select tool */
+function pickMask(p, extend) {
+  /* topmost visible mask under the cursor; Shift adds the pixel-scale ring search so
+     thin masks (fringes, outlines) are still grabbable */
+  if (!inb(p.x, p.y)) return;
+  for (let i = S.masks.length - 1; i >= 0; i--) {
+    const m = S.masks[i];
+    if (!m.visible) continue;
+    if (m.data[p.y * S.W + p.x]) { selectMask(i); return; }
+  }
+  if (extend) {
+    for (let r = 1; r <= 3; r++) {
+      for (let i = S.masks.length - 1; i >= 0; i--) {
+        const m = S.masks[i];
+        if (!m.visible) continue;
+        for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const x = p.x + dx, y = p.y + dy;
+          if (x >= 0 && y >= 0 && x < S.W && y < S.H && m.data[y * S.W + x]) {
+            selectMask(i); return;
+          }
+        }
+      }
+    }
+  }
+  setStatus(`no mask at ${p.x},${p.y}` + (extend ? '' : ' — Shift-click searches a 3px ring'));
+}
+function selectMask(i) {
+  if (S.sel === i) { draw(); return; }
+  S.sel = i;
+  rebuildOverlay(); renderList(); renderInsp(); draw();
+  setStatus(`selected ${S.masks[i].name} (${S.masks[i].px}px)`);
+}
+
 /* ------------------------------------------------------------------ wand */
 async function doWand(p, add, m) {
   if (!inb(p.x, p.y)) return;
@@ -684,7 +833,7 @@ async function doWand(p, add, m) {
     const r = await api('/api/wand', { pid: S.meta.id, x: p.x, y: p.y, tol: S.tol,
                                       conn: S.conn, mode: S.wmode,
                                       snap: S.wmode === 'seed' && S.snap ? 48 : 0,
-                                      smooth: true });
+                                      smooth: true, dguard: S.dguard });
     if (!r.px) { setStatus('wand grabbed nothing — raise tolerance'); return; }
     const n = applyBool(m, decodeRLE(r.rle), add);
     setStatus(`wand: ${r.px}px region, ${n}px ${add ? 'added' : 'removed'} on ${m.name}`);
@@ -705,7 +854,7 @@ async function flushSave() {
                z: S.masks.indexOf(m), visible: m.visible, nfrag: m.nfrag,
                label: m.label, conf: m.conf, anim: m.anim, params: m.params || {},
                anim_hint: m.anim_hint || '', shadow: !!m.shadow,
-               rle: encodeRLE(m.data) });
+               surface: m.surface || '', rle: encodeRLE(m.data) });
   }
   const deleting = S.pendingDeletes || [];
   for (const id of deleting) ops.push({ op: 'delete', id });
@@ -742,17 +891,29 @@ async function openProject(pid) {
   if (ep !== OPEN_EPOCH) return;
   S.meta = meta; S.W = meta.native_w; S.H = meta.native_h;
   $('tlN').value = meta.N || 48; $('tlFps').value = meta.fps || 12;
-  S.masks = []; S.sel = -1; S.undo = []; S.redo = []; S.dirty.clear();
+  S.masks = []; S.sel = -1; S.undo = []; S.redo = []; S.dirty.clear(); syncHist();
   overlay.width = S.W; overlay.height = S.H;
   const nb = await (await fetch('/api/image/' + pid + '/native.png')).blob();
   S.img = await createImageBitmap(nb);
+  S.depthImg = S.orientImg = null;                 // M6b overlays (best effort)
+  S.normalImg = null; S.depthMlImg = null; S.mlTried = false;
+  for (const [key, name] of [['depthImg', 'depth.png'], ['orientImg', 'orient.png'],
+                             ['normalImg', 'normal.png']]) {
+    try {
+      const rb = await (await fetch(`/api/image/${pid}/${name}`)).blob();
+      if (ep !== OPEN_EPOCH) return;
+      S[key] = await createImageBitmap(rb);
+    } catch (e) { /* older project dir without the field */ }
+  }
   if (ep !== OPEN_EPOCH) return;
+  fetchDepthMl();          // M6e: best-effort, never blocks the open
   for (const o of meta.objects || []) {
     const m = makeMask({ id: o.id, name: o.name, kind: o.kind || 'object',
                          color: o.color || nextColor(S.masks.length), visible: o.visible !== false,
                          nfrag: o.nfrag || 1, label: o.label || o.name, conf: o.conf || 0,
                          anim: o.anim || 'static', params: o.params || {},
-                         anim_hint: o.anim_hint || '', shadow: !!o.shadow });
+                         anim_hint: o.anim_hint || '', shadow: !!o.shadow,
+                         surface: o.surface || '' });
     try {
       const mb = await (await fetch(`/api/mask/${pid}/${o.id}.png`)).blob();
       const bmp = await createImageBitmap(mb);
@@ -826,7 +987,14 @@ $('pdel').onclick = async () => {
 function resetEditor() {
   OPEN_EPOCH++;   // cancel any in-flight openProject (M5 race fix)
   S.meta = null; S.img = null; S.masks = []; S.sel = -1;
-  S.undo = []; S.redo = []; S.dirty.clear();
+  S.depthImg = null; S.depthMlImg = null; S.orientImg = null; S.normalImg = null;
+  S.mlTried = false; S.tab = 'masks';
+  document.querySelectorAll('#tabs button').forEach(b => {
+    const on = b.dataset.tab === 'masks';
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  S.undo = []; S.redo = []; S.dirty.clear(); syncHist();
   overlay.width = 1; overlay.height = 1;
   hint.style.display = 'flex';
   hint.innerHTML = 'No image loaded.<br>Drop a pixel-art PNG here, or click “Load image”.<br>' +
@@ -838,6 +1006,8 @@ function resetEditor() {
   $('tlstat').textContent = 'set anim types in the inspector, then Render';
   history.replaceState(null, '', location.pathname);
 }
+$('hundo').onclick = () => undo();
+$('hredo').onclick = () => redo();
 $('helpbtn').onclick = () => $('help').classList.toggle('on');
 $('helpclose').onclick = () => $('help').classList.remove('on');
 
@@ -923,6 +1093,12 @@ function renderInsp() {
         <option value="object"${m.kind === 'object' ? ' selected' : ''}>object</option>
         <option value="region"${m.kind === 'region' ? ' selected' : ''}>region</option>
       </select>
+      <label>surface</label><select id="iSurf" title="M6b: what this mask is made of,
+        for the depth field (auto = trust the recogniser / geometry)">
+        <option value=""${!m.surface ? ' selected' : ''}>auto</option>
+        <option value="wall"${m.surface === 'wall' ? ' selected' : ''}>standing (wall)</option>
+        <option value="ground"${m.surface === 'ground' ? ' selected' : ''}>ground plane</option>
+      </select>
       <label>colour</label><input type="color" id="iCol" value="${hexCss(m.color)}">
       <label>anim</label><select id="iAnim" title="animation type (plan §3 catalog)">${types}</select>
       <label>preset</label><span style="display:flex;gap:4px;align-items:center">
@@ -943,6 +1119,9 @@ function renderInsp() {
         fill every hole (the inverse of outline)">solid</button>
       <button class="btn" data-edge="fill">hole-fill</button>
       <button class="btn" data-edge="close">close</button>
+      <button class="btn" data-edge="depthsplit" title="M6b: cut this mask at ground-row
+        jumps — the combine-or-split cut line of plan §8, proposed automatically.
+        Pieces become their own masks.">split @depth</button>
     </div>
     <div class="stat">${m.px}px${m.bbox ? `  bbox ${m.bbox[0]},${m.bbox[1]}–${m.bbox[2]},${m.bbox[3]}` : ''}
       depth ${m.depth}  z ${S.masks.indexOf(m)}  ${m.kind}${m.nfrag > 1 ? `  ${m.nfrag} frags` : ''}</div>
@@ -950,6 +1129,9 @@ function renderInsp() {
       ${m.anim_hint ? `<br>anim hint: ${m.anim_hint}` : ''}</div>`;
   $('iName').onchange = e => { m.name = e.target.value.trim() || m.name; renderList(); markDirty(m); };
   $('iKind').onchange = e => { m.kind = e.target.value; renderList(); markDirty(m); };
+  $('iSurf').onchange = e => { m.surface = e.target.value; markDirty(m);
+    setStatus(m.surface ? `${m.name}: surface = ${m.surface} (depth field updated)`
+      : `${m.name}: surface = auto`); };
   $('iCol').oninput = e => { m.color = cssHex(e.target.value); retint(m); rebuildOverlay(); renderList(); markDirty(m); };
   $('iAnim').onchange = e => { m.anim = e.target.value; m.params = animParams(m);
                                renderInsp(); markDirty(m); };
@@ -1046,6 +1228,28 @@ async function doEdge(m, op) {
   setStatus(`edge ${op} on ${m.name}…`);
   try {
     const r = await api('/api/edge', { pid: S.meta.id, rle: encodeRLE(m.data), op });
+    if (op === 'depthsplit') {
+      if (!r.pieces || r.pieces.length < 2) {
+        setStatus(`split @depth: ${m.name} sits on one surface — nothing to cut`);
+        return;
+      }
+      pushUndo(m);
+      m.data = decodeRLE(r.pieces[0].rle);
+      retint(m); markDirty(m);
+      const at = S.masks.indexOf(m) + 1;
+      r.pieces.slice(1).forEach((pc, i) => {
+        const u = makeMask({ name: `${m.name} part ${i + 2}`, kind: m.kind,
+                             color: nextColor(S.masks.length + i), nfrag: 1,
+                             label: m.label, conf: m.conf, surface: m.surface });
+        u.data = decodeRLE(pc.rle);
+        retint(u);
+        S.masks.splice(at + i, 0, u);
+        markDirty(u);
+      });
+      rebuildOverlay(); renderList(); renderInsp(); draw();
+      setStatus(`split @depth: ${r.n} pieces — ${r.n - 1} new mask(s)`);
+      return;
+    }
     pushUndo(m);
     m.data = decodeRLE(r.rle);
     retint(m); rebuildOverlay(); renderList(); markDirty(m); draw();
@@ -1084,13 +1288,16 @@ function undo() {
   S.redo.push({ m: u.m, data: u.m.data.slice() });
   u.m.data.set(u.data);
   retint(u.m); rebuildOverlay(); renderList(); markDirty(u.m); draw();
-  setStatus('undo');
+  syncHist();
+  setStatus(`undo (${S.undo.length} left, ${S.redo.length} to redo)`);
 }
 function redo() {
   const r = S.redo.pop(); if (!r) return;
   S.undo.push({ m: r.m, data: r.m.data.slice() });
   r.m.data.set(r.data);
   retint(r.m); rebuildOverlay(); renderList(); markDirty(r.m); draw();
+  syncHist();
+  setStatus(`redo (${S.redo.length} left)`);
 }
 
 /* ------------------------------------------------------------------ auto-seg */
@@ -1100,6 +1307,7 @@ function redo() {
 let sgCache = [];
 let sgPrevCanvas = null, sgPrevIdx = -1;
 const ASG_DEFAULT = { cap: 60, min: 25, merge: 2, absorb: 14, grow: 2, conn: 8,
+  split: true,
                       regions: true, onload: true, recog: true };
 try { S.asg = Object.assign({}, ASG_DEFAULT, JSON.parse(localStorage.getItem('ps_asg') || '{}')); }
 catch (e) { S.asg = Object.assign({}, ASG_DEFAULT); }
@@ -1109,7 +1317,7 @@ function asgToForm() {
   $('asAbsorb').value = S.asg.absorb; $('asGrow').value = S.asg.grow;
   $('asConn').value = String(S.asg.conn);
   $('asRegions').checked = !!S.asg.regions; $('asOnload').checked = !!S.asg.onload;
-  $('asRecog').checked = S.asg.recog !== false;
+  $('asRecog').checked = S.asg.recog !== false; $('asSplit').checked = S.asg.split !== false;
 }
 function asgFromForm() {
   const num = (id, lo, hi, fb) => Math.min(hi, Math.max(lo, +$(id).value || fb));
@@ -1117,7 +1325,7 @@ function asgFromForm() {
             merge: num('asMerge', 0, 6, 2), absorb: num('asAbsorb', 0, 40, 14),
             grow: num('asGrow', 0, 4, 2), conn: +$('asConn').value === 4 ? 4 : 8,
             regions: $('asRegions').checked, onload: $('asOnload').checked,
-            recog: $('asRecog').checked };
+            recog: $('asRecog').checked, split: $('asSplit').checked };
   asgSave();
 }
 function updateSel() {
@@ -1197,7 +1405,8 @@ async function runAutoseg(auto) {
       pid: S.meta.id, max_suggestions: S.asg.cap, conn: S.asg.conn,
       cfg: { min_object_px: S.asg.min, merge_k: S.asg.merge, absorb_gap: S.asg.absorb,
              grow_r: S.asg.grow, include_regions: S.asg.regions,
-             recognise: S.asg.recog !== false } });
+             recognise: S.asg.recog !== false,
+             depth_split: S.asg.split !== false } });
     sgCache = r.suggestions;
     sgPrevCanvas = null; sgPrevIdx = -1; S.sgPreview = null;
     const nobj = sgCache.filter(s => s.kind === 'object').length;
@@ -1232,7 +1441,8 @@ $('autoseg').onclick = () => runAutoseg(false);
 $('mset').onclick = () => $('msettings').classList.toggle('on');
 $('mrerun').onclick = () => { asgFromForm(); runAutoseg(false); };
 $('asReset').onclick = () => { S.asg = Object.assign({}, ASG_DEFAULT); asgSave(); asgToForm(); };
-['asCap', 'asMin', 'asMerge', 'asAbsorb', 'asGrow', 'asConn', 'asRegions', 'asOnload', 'asRecog']
+['asCap', 'asMin', 'asMerge', 'asAbsorb', 'asGrow', 'asConn', 'asRegions', 'asOnload',
+ 'asRecog', 'asSplit']
   .forEach(id => { $(id).onchange = asgFromForm; });
 $('mobjs').onclick = () => { sgCache.forEach(s => { if (s._box) s._box.checked = s.kind === 'object'; }); updateSel(); };
 $('mnone').onclick = () => { sgCache.forEach(s => { if (s._box) s._box.checked = false; }); updateSel(); };
@@ -1269,6 +1479,7 @@ function pvDraw(f) {
   x.clearRect(0, 0, PV.fw, PV.fh);
   x.drawImage(PV.strip, cc * PV.fw, r * PV.fh, PV.fw, PV.fh, 0, 0, PV.fw, PV.fh);
   PV.cur = f;
+  if (S.tab === 'anim') draw();
   $('frlbl').textContent = (f + 1) + '/' + PV.N;
   const sc = $('scrub');
   if (+sc.max !== PV.N - 1) sc.max = PV.N - 1;
@@ -1390,6 +1601,39 @@ $('wmode').onclick = e => { S.wmode = S.wmode === 'hue' ? 'seed' : 'hue';
     ? 'wand: hue-family metric — one click grabs a whole dithered object'
     : 'wand: classic seed-colour tolerance (palette-snap available)'); };
 $('snap').onclick = e => { S.snap = !S.snap; e.target.classList.toggle('on', S.snap); };
+$('dguard').onclick = e => {
+  S.dguard = [0, 2, 4, 8][([0, 2, 4, 8].indexOf(S.dguard) + 1) % 4];
+  e.target.textContent = S.dguard ? `guard ${S.dguard}` : 'guard off';
+  e.target.classList.toggle('on', !!S.dguard);
+  setStatus(S.dguard
+    ? `wand depth guard ${S.dguard} rows — the flood stops at ground-row jumps`
+    : 'wand depth guard off — colour flood only');
+};
+const TABS = ['masks', 'depth', 'normals', 'anim'];
+function setTab(t) {
+  if (!S.img) { setStatus('load an image first'); return; }
+  S.tab = t;
+  document.querySelectorAll('#tabs button').forEach(b => {
+    const on = b.dataset.tab === t;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  if (t === 'depth') fetchDepthMl();
+  if (t === 'anim') {
+    if (!PV.strip || !PV.N) { doRender().then(() => { if (S.tab === 'anim') pvPlay(true); }); }
+    else pvPlay(true);
+  } else if (PV.playing) pvPlay(false);
+  setStatus(t === 'masks' ? 'mask editing'
+    : t === 'depth' ? (S.depthMlImg
+        ? 'depth tab: model-fused closeness (monocular layout + parse), bright = near'
+        : 'depth tab: ground-row closeness, bright = near (drag to pan)')
+    : t === 'normals' ? 'normals tab: tangent-space bump map from the art’s shading'
+    : 'anim tab: the rendered loop, playing in place');
+  draw();
+}
+function cycleTab() { setTab(TABS[(TABS.indexOf(S.tab) + 1) % TABS.length]); }
+document.querySelectorAll('#tabs button').forEach(b =>
+  b.onclick = () => setTab(b.dataset.tab));
 
 let spaceDown = false;
 window.addEventListener('keydown', e => {
@@ -1411,9 +1655,12 @@ window.addEventListener('keydown', e => {
     return;
   }
   if (k === 'delete') { delMask(); return; }
-  const tools = { b: 'brush', e: 'eraser', r: 'rect', l: 'lasso', w: 'wand', h: 'pan' };
+  const tools = { b: 'brush', e: 'eraser', r: 'rect', l: 'lasso', w: 'wand', h: 'pan',
+                    v: 'select' };
   if (tools[k]) { document.querySelector(`.tool[data-tool=${tools[k]}]`).click(); return; }
   if (k === 'a') runAutoseg();
+  else if (k === 'd') cycleTab();
+  else if (k === 'v') { document.querySelector('.tool[data-tool=select]').click(); }
   else if (k === 'n') newMask();
   else if (k === '[') { $('nib').value = Math.max(1, S.nib - 1); $('nib').oninput({ target: $('nib') }); }
   else if (k === ']') { $('nib').value = Math.min(16, S.nib + 1); $('nib').oninput({ target: $('nib') }); }
@@ -1440,6 +1687,7 @@ window.addEventListener('drop', e => {
 window.addEventListener('resize', resize);
 window.addEventListener('beforeunload', () => { if (S.dirty.size) navigator.sendBeacon?.('/api/masks'); });
 window.__PS = S;            // test hook: app/tests/ui_smoke.js drives the editor through this
+window.__PV = PV;           // test hook: the preview strip the anim tab blits
 resize(); updZoom(); renderList();
 const qp = new URLSearchParams(location.search).get('p');
 if (HAVE_SERVER && qp) openProject(qp).catch(err => setStatus('cannot open project: ' + err.message));

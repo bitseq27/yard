@@ -91,7 +91,17 @@ integer number of cycles in N frames, and the audit checks frame N−1 → 0 too
   <tr><td>Wand</td><td><span class="kbd">W</span></td><td>flood-select by colour tolerance; adds to (or subtracts from) the mask</td></tr>
   <tr><td>Auto-seg</td><td><span class="kbd">A</span></td><td>segment + recognise the whole scene; presents an accept-list</td></tr>
   <tr><td>Edge ops</td><td>—</td><td>grow/shrink/solid the selected mask (server-side morphology)</td></tr>
+  <tr><td>Select</td><td><span class="kbd">V</span></td><td>pick the topmost visible mask
+      under the cursor (the rail icon looks like a cursor); <span class="kbd">⇧</span>+click
+      searches a 3-px ring first so thin fringes stay grabbable; empty art keeps the
+      selection, hidden masks are never picked</td></tr>
 </table>
+<p><b>View tabs</b> sit above the canvas and swap what the stage shows:
+<b>masks</b> (editing on the art) · <b>depth</b> (M6a ground-row closeness, bright =
+near) · <b>normals</b> (the M6c tangent-space bump map, derived from the art's
+shading) · <b>anim</b> (the rendered loop, playing in place — it renders on first
+open). <span class="kbd">D</span> cycles them; the non-mask tabs are pan-only so a
+stray brush stroke can never land on a derived view.</p>
 <p>Masks are stored as row-run RLE in the project doc — tiny JSON, exact pixels.
 Objects animate; <b>regions</b> (kind=region) never animate but feed the walkmask in
 bundle exports. Hidden masks (eye off) are treated as background: they stay plate
@@ -178,7 +188,9 @@ Target engine is a custom web JS engine: plain JSON + PNG is the final format.</
 <h2 id="api">8 · HTTP API</h2>
 <table>
   <tr><th>endpoint</th><th>payload → result</th></tr>
-  <tr><td>GET /api/ping</td><td>→ {ok, milestone, engine}</td></tr>
+  <tr><td>GET /api/ping</td><td>→ {ok, milestone, engine, depth_ml} — depth_ml names the
+      depth-pass source (<code>da-v2-small-int8@w0.8</code>, <code>midas-v21-small@w0.6</code>
+      or <code>parse-only</code>)</td></tr>
   <tr><td>POST /api/upload</td><td>raw PNG bytes → {id, w, h, grid, native_w/h}</td></tr>
   <tr><td>GET /api/projects</td><td>→ [{id, name, w, h, objects, mtime}] (recent last)</td></tr>
   <tr><td>GET /api/project/&lt;pid&gt;</td><td>→ the project doc</td></tr>
@@ -188,12 +200,21 @@ Target engine is a custom web JS engine: plain JSON + PNG is the final format.</
   <tr><td>POST /api/project/&lt;pid&gt;/delete</td><td>{} → {ok}</td></tr>
   <tr><td>POST /api/masks</td><td>{pid, ops:[upsert/delete…]} → saved doc (RLE or PNG masks)</td></tr>
   <tr><td>POST /api/autoseg</td><td>{pid, max_suggestions, cfg, conn} → suggestions (RLE)</td></tr>
-  <tr><td>POST /api/edge</td><td>{pid?, rle, op:grow|shrink|solid|…, n} → {rle, px, bbox}</td></tr>
+  <tr><td>POST /api/edge</td><td>{pid?, rle, op:grow|shrink|solid|…|depthsplit, n,
+      thresh?, min_px?} → {rle, px, bbox} or, for depthsplit, {pieces:[{rle,px,bbox}], n}</td></tr>
+  <tr><td>POST /api/wand</td><td>+ <code>dguard</code> (rows, 0=off): the flood may not
+      leave the seed's ground-row band (M6b)</td></tr>
   <tr><td>POST /api/render</td><td>{pid, N, fps} → {strip, cols, fw, fh, audit, ms, cached, total_ms}</td></tr>
   <tr><td>POST /api/gif</td><td>{pid, N, fps, scale, colors} → {url, bytes, audit, warn?}</td></tr>
   <tr><td>POST /api/bundle</td><td>{pid, N, fps, colors, atlas} → {url, bytes, sheets, atlas_pages, audit}</td></tr>
   <tr><td>GET /api/out/&lt;pid&gt;/…</td><td>strip.png · preview.gif · bundle.zip (whitelist)</td></tr>
-  <tr><td>GET /api/image/&lt;pid&gt;/…</td><td>native.png · original.png</td></tr>
+  <tr><td>GET /api/image/&lt;pid&gt;/…</td><td>native.png · original.png · depth.png (M6a
+      closeness map) · orient.png (M6b surface tint: wall red, ground green, object
+      blue) · normal.png (M6c tangent-space bump map) · depth_ml.png (M6e model-fused
+      closeness, present only when the server has the optional depth accelerator).
+      The derived views come from the art alone: a project uploaded before they existed
+      rebuilds the file on the first GET instead of 404ing (depth_ml.png rebuilds only
+      when the accelerator is installed).</td></tr>
   <tr><td>GET /api/mask/&lt;pid&gt;/&lt;id&gt;.png</td><td>one mask, grayscale PNG</td></tr>
 </table>
 <p>Errors come back as <code>{error}</code> with 4xx/5xx; <b>429</b> means
@@ -216,6 +237,31 @@ Target engine is a custom web JS engine: plain JSON + PNG is the final format.</
   <li><b>Determinism</b> — same doc + masks ⇒ byte-identical renders (seeded per
       object id).</li>
   <li><b>Sprite parity</b> — bundle sheets recomposite to the render frames exactly.</li>
+  <li><b>Ground rows</b> (M6a) — every pixel knows the ground row its surface stands on
+      (<code>engine/depth.py</code>: junction line from the floor sheet's top row, wall
+      pixels on their column's junction, objects on their ground contact); z sort keys
+      are iso closeness at the <i>feet</i>, so equal ground rows tie whatever the
+      height. <code>depth.png</code> ships the closeness map per project.</li>
+  <li><b>Normal map is a bump, not a solve</b> (M6c) — pixel art carries no geometry to
+      photogrammetry-solve, so <code>engine/depth.normal_map()</code> takes height = the
+      palette-snapped luminance, box-means it once (3×3) so 1-px dither stays flat while
+      real edges stay sharp (measured: a 1-px checkerboard interior deviates 0 levels,
+      a hard step reads tilt sd 11.3), and central-differences that into a tangent-space
+      RGB map, G up (OpenGL). Flat shading is exactly (128, 128, 255); every encoded
+      vector is unit length (|n|−1 ≤ 0.006 on the courtyard) and never faces away
+      (z ≥ 0.75, B ≥ 223); courtyard tilt sd 13.8/128. Shipped as <code>normal.png</code>
+      per project and shown in the normals tab; a shading-aware inpaint or a
+      <code>relight</code> clip type would consume the same map later.</li>
+  <li><b>Depth accelerator is optional</b> (M6e) — the parse field (§9.9) reads flat next
+      to real depth (piecewise plates, no facade), and monocular models fix layout but
+      blur interiors (bake-off: app/tests/depth_alts.py — DA-v2-small rho .804 vs parse
+      .556/.688, within-object order the other way round). So the depth TAB can show a
+      blend, w·model + (1−w)·parse with w picked by a documented rule (DA-v2-int8 0.8,
+      MiDaS-v21 0.6), computed by <code>engine/depth_ml.py</code> in a background thread
+      at upload and served as <code>depth_ml.png</code>. onnxruntime is imported lazily
+      and only when a model file exists; without it every byte stays numpy+PIL (rule 11)
+      and the tab shows the parse. No tested solution recovers facade relief from a
+      single pixel-art image — that negative result is measured, not assumed.</li>
 </ol>
 
 <h2 id="perf">10 · Performance &amp; concurrency</h2>
@@ -234,11 +280,18 @@ Target engine is a custom web JS engine: plain JSON + PNG is the final format.</
   <li><b>Sprite build</b>: pieces blit through cached flat-index tables per integer
       offset, and frames whose offset pattern repeats are memoised — a frame costs a
       handful of numpy assignments, not a python loop over runs.</li>
+  <li><b>Depth accelerator</b> (M6e, optional): the model fuse (DA-v2-int8 ~4.5 s,
+      MiDaS ~0.4 s, CPU) runs in a background thread after upload so the &lt;2 s upload
+      budget holds (measured 673 ms armed); the editor lazy-fetches depth_ml.png and a
+      still-fusing project answers 404 rather than double-running the model.</li>
 </ul>
 
 <h2 id="keys">11 · Keyboard shortcuts</h2>
 <table>
   <tr><th><span class="kbd">B</span> / <span class="kbd">W</span> / <span class="kbd">A</span></th><td>brush / wand / auto-seg</td></tr>
+  <tr><th><span class="kbd">V</span></th><td>select tool: pick the mask under the cursor (⇧ = 3-px ring search)</td></tr>
+  <tr><th><span class="kbd">D</span></th><td>cycle the view tabs: masks → depth → normals → anim</td></tr>
+  <tr><th><span class="kbd">Ctrl+Z</span> / <span class="kbd">Ctrl+⇧Z</span></th><td>undo / redo (the header ↶ ↷ buttons mirror the same history and show its depth)</td></tr>
   <tr><th><span class="kbd">P</span></th><td>play/pause the strip</td></tr>
   <tr><th><span class="kbd">,</span> / <span class="kbd">.</span></th><td>step frame back / forward</td></tr>
   <tr><th><span class="kbd">G</span> / <span class="kbd">⇧G</span></th><td>export GIF / export bundle</td></tr>
@@ -260,9 +313,17 @@ Target engine is a custom web JS engine: plain JSON + PNG is the final format.</
       retry in a few seconds.</li>
   <li><b>Streaks inside big holes</b> — the vertical-blend inpaint pass reduces hard
       row steps; for pathological masks, split the object into two masks.</li>
+  <li><b>Normals tab looks almost flat lavender</b> — that is correct: the map is a
+      bump from the art's own shading, so flat shading encodes (128, 128, 255) and only
+      real edges tilt. Read the relief in the R/G channels, not the B.</li>
+  <li><b>Depth tab looks flat / banded</b> — that is the parse field (ground-row plates).
+      With the optional accelerator installed (build_log Setup: <code>python3
+      app/tests/dl_models.py</code>) the tab shows the model-fused map instead; the first
+      visit may take ~5 s while it fuses. <code>DEPTH_MODEL=midas</code> swaps in the
+      0.4 s model, <code>DEPTH_MODEL=off</code> forces the parse.</li>
 </ul>
 
-<p class="dim" style="margin-top:40px">Pixel Sway — milestones M1–M5 complete.
+<p class="dim" style="margin-top:40px">Pixel Sway — milestones M1–M6 complete.
 See <code>plan.md</code> and <code>build_log.md</code> in the repo for the full
 ledger, and <code>app/tests/</code> for the machine-verified acceptance suites.</p>
 </main>

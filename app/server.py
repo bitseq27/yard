@@ -10,7 +10,9 @@ Routes
   GET  /                                  editor (single file, no CDN deps)
   GET  /api/ping                          {ok, milestone}
   POST /api/upload                        raw image bytes -> project meta
-  GET  /api/image/<pid>/{native,original}.png
+  GET  /api/image/<pid>/{native,original,depth,orient,normal}.png
+                                  (the last three are derived; a project that
+                                   predates them rebuilds the file on first GET)
   GET  /api/project/<pid>                 project doc (objects/regions/N/fps/palette)
   POST /api/project/<pid>                 save the doc (names, colours, z, visibility)
   GET  /api/mask/<pid>/<mid>.png          one mask, grayscale PNG
@@ -38,12 +40,12 @@ from urllib.parse import urlparse, parse_qs
 import numpy as np
 from PIL import Image
 
-from engine import imaging as im
-from engine import segment, animate, export
+from engine import depth_ml, imaging as im
+from engine import segment, animate, export, depth
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PROJ = os.path.join(ROOT, 'projects')
-MILESTONE = 'M5'
+MILESTONE = 'M6'
 
 
 def _engine_version():
@@ -52,7 +54,8 @@ def _engine_version():
     h = hashlib.md5()
     base = os.path.dirname(os.path.abspath(__file__))
     for fn in ('engine/animate.py', 'engine/export.py', 'engine/imaging.py',
-               'engine/segment.py', 'engine/recognise.py', 'server.py'):
+               'engine/segment.py', 'engine/recognise.py', 'engine/depth.py',
+               'server.py'):
         try:
             with open(os.path.join(base, fn), 'rb') as f:
                 h.update(f.read())
@@ -104,6 +107,7 @@ def _work_slot(pid, sem=True):
 os.makedirs(PROJ, exist_ok=True)
 _LOCK = threading.Lock()
 _CACHE = {}                                    # pid -> (key, render result)
+_FIELD = {}                                    # pid -> (key, depth field) M6b
 _OUT_FILES = ('strip.png', 'preview.gif', 'bundle.zip')
 
 
@@ -187,6 +191,77 @@ def _render_key(pid, doc, N, fps):
         h.update(str(int(os.path.getmtime(fp) * 1000) if os.path.exists(fp) else 0).encode())
     h.update(f'{N}|{fps}|{ENGINE_V}'.encode())
     return h.hexdigest()
+
+
+_ML_PENDING = set()          # pids whose background depth-ml fuse is still running
+
+
+def _bg_fuse(pid, nat, parse):
+    try:
+        u8, _mm = depth_ml.fuse(nat, parse)
+        if u8 is not None:
+            Image.fromarray(u8).save(os.path.join(_pdir(pid), 'depth_ml.png'))
+    except Exception as e:
+        print(f'depth_ml fuse failed for {pid}: {type(e).__name__}: {e}')
+    finally:
+        _ML_PENDING.discard(pid)
+
+
+def _write_art_views(pid, nat=None, only=None):
+    """The art-only derived views: depth.png (M6a), orient.png (M6b), normal.png (M6c).
+
+    Written at upload, and rebuilt on demand when a project predates them — the four
+    tracked M1 examples and anything uploaded before M6 — so a tab never shows a
+    placeholder for a view the engine can derive from native.png alone.
+    """
+    d = _pdir(pid)
+    if nat is None:
+        nat = _native(pid)
+    f = {}
+
+    def fld():
+        if 'f' not in f:
+            f['f'] = depth.field(nat)
+        return f['f']
+
+    writers = (('depth.png', lambda: fld()['depth']),
+               ('orient.png', lambda: depth.render_orient(fld())),
+               ('normal.png', lambda: depth.normal_map(nat)))
+    for name, fn in writers:
+        if only and name != only:
+            continue
+        Image.fromarray(fn()).save(os.path.join(d, name))
+    return fld()
+
+
+def _field_key(pid, doc):
+    """Anything that can change the depth field invalidates it: mask pixels, the
+    recognised labels and the surfaces the user set in the inspector (M6b)."""
+    h = hashlib.md5()
+    for o in doc.get('objects', []):
+        h.update(json.dumps([o.get('id'), o.get('kind'), o.get('label'),
+                             o.get('surface', '')], sort_keys=True).encode())
+        fp = _mask_path(pid, o['id'])
+        h.update(str(int(os.path.getmtime(fp) * 1000) if os.path.exists(fp) else 0).encode())
+    h.update(ENGINE_V.encode())
+    return h.hexdigest()
+
+
+def _field(pid, doc):
+    """Depth/orientation field including the project's masks (wand guard, split).
+    The art-only field is written at upload; this one adds OBJECT rows and the
+    surfaces/labels the user corrected, cached like the render cache (M5)."""
+    key = _field_key(pid, doc)
+    hit = _FIELD.get(pid)
+    if hit and hit[0] == key:
+        return hit[1]
+    f = depth.field(_native(pid), objects=_load_objects(pid, doc, with_regions=True))
+    _FIELD[pid] = (key, f)
+    if len(_FIELD) > 2:
+        for k in list(_FIELD):
+            if k != pid:
+                del _FIELD[k]
+    return f
 
 
 def _get_render(pid, doc, N, fps):
@@ -276,7 +351,8 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         if u.path == '/api/ping':
-            self._send(200, {'ok': True, 'milestone': MILESTONE, 'engine': ENGINE_V})
+            self._send(200, {'ok': True, 'milestone': MILESTONE, 'engine': ENGINE_V,
+                              'depth_ml': depth_ml.source()})
             return
         if u.path in ('/', '/index.html'):
             with open(os.path.join(ROOT, 'static', 'index.html'), 'rb') as f:
@@ -289,10 +365,24 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in u.path.split('/') if p]
         if len(parts) == 4 and parts[0] == 'api' and parts[1] == 'image':
             pid, which = parts[2], parts[3]
-            if which not in ('native.png', 'original.png'):
+            if which not in ('native.png', 'original.png', 'depth.png', 'orient.png',
+                              'normal.png', 'depth_ml.png'):
                 self._send(404, {'error': 'not found'})
                 return
-            self._file(os.path.join(_pdir(pid), which), 'image/png')
+            fp = os.path.join(_pdir(pid), which)
+            if not os.path.exists(fp) and which in ('depth.png', 'orient.png', 'normal.png'):
+                with contextlib.suppress(Exception):
+                    _write_art_views(pid, only=which)     # pre-M6 project: derive it now
+            if not os.path.exists(fp) and which == 'depth_ml.png':
+                if pid in _ML_PENDING:               # still fusing: don't double-run
+                    self._send(404, {'error': 'fusing'})
+                    return
+                with contextlib.suppress(Exception):
+                    nat = _native(pid)
+                    u8, _mm = depth_ml.fuse(nat, depth.field(nat)['depth'])
+                    if u8 is not None:
+                        Image.fromarray(u8).save(fp)
+            self._file(fp, 'image/png')
             return
         if len(parts) == 4 and parts[0] == 'api' and parts[1] == 'mask':
             self._file(_mask_path(parts[2], parts[3].replace('.png', '')), 'image/png')
@@ -383,6 +473,17 @@ class Handler(BaseHTTPRequestHandler):
         os.makedirs(os.path.join(d, 'masks'), exist_ok=True)
         Image.fromarray(a).save(os.path.join(d, 'original.png'))
         Image.fromarray(nat).save(os.path.join(d, 'native.png'))
+        # M6a/M6c: the derived views depend on the art alone, so they are computed
+        # once at upload and served for the editor tabs + M6b surface tools.
+        fld = _write_art_views(pid, nat)
+        # M6e: the optional model-fused depth runs in the BACKGROUND — the M2
+        # upload budget (<2 s) protects the parse pipeline, and the depth tab
+        # lazy-fetches depth_ml.png when the user first opens it. Without the
+        # accelerator runtime/model this is a no-op and the bytes stay M6b's.
+        if depth_ml.available():
+            _ML_PENDING.add(pid)
+            threading.Thread(target=_bg_fuse, args=(pid, nat, fld['depth']),
+                             daemon=True).start()
         doc = {'id': pid, 'w': img.width, 'h': img.height, 'grid': p,
                'native_w': int(nat.shape[1]), 'native_h': int(nat.shape[0]),
                'process_ms': round((time.time() - t0) * 1000),
@@ -450,6 +551,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {'error': 'no such project'})
                 return
             shutil.rmtree(d)
+        _FIELD.pop(pid, None)
         self._send(200, {'ok': True})
 
     def _masks(self):
@@ -481,6 +583,8 @@ class Handler(BaseHTTPRequestHandler):
                     for k in ('z', 'visible', 'nfrag', 'depth', 'label', 'conf'):
                         if k in op:
                             entry[k] = op[k]
+                    if op.get('surface') in ('', 'wall', 'ground', None):
+                        entry['surface'] = op.get('surface') or ''
                     if 'shadow' in op:
                         entry['shadow'] = bool(op['shadow'])
                     if 'anim' in op or 'params' in op:
@@ -508,10 +612,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def _wand(self):
         b = self._json_body()
-        nat = _native(b['pid'])
+        pid = b['pid']
+        nat = _native(pid)
+        dguard = min(max(0, int(b.get('dguard', 0) or 0)), 64)
+        base_y = None
+        if dguard:                       # M6b depth guard: stop at ground-row jumps
+            base_y = _field(pid, _load_doc(pid))['base_y']
         m = im.wand(nat, int(b['y']), int(b['x']), tol=int(b.get('tol', 30)),
                     conn=int(b.get('conn', 8)), snap=int(b.get('snap', 0)),
-                    smooth=bool(b.get('smooth', True)), mode=b.get('mode', 'hue'))
+                    smooth=bool(b.get('smooth', True)), mode=b.get('mode', 'hue'),
+                    base_y=base_y, dguard=dguard)
         st = im.stats_of(m)
         self._send(200, {'ok': True, 'rle': im.rle_encode(m), 'px': st['px'],
                          'bbox': st['bbox'], 'mode': b.get('mode', 'hue')})
@@ -559,6 +669,20 @@ class Handler(BaseHTTPRequestHandler):
             m = im.holefill(m)
         elif op == 'close':
             m = im.close4(m, n)
+        elif op == 'depthsplit':
+            # M6b: cut the mask at ground-row jumps (plan §8's combine-or-split cut
+            # line, proposed automatically) and hand the pieces back
+            thresh = min(max(1, int(b.get('thresh', 3))), 16)
+            min_px = min(max(4, int(b.get('min_px', 25))), 1000)
+            fld = _field(b['pid'], doc)
+            pieces = depth.split_pieces(m, fld['base_y'], thresh, min_px,
+                                        orient=fld['orient'])
+            out = []
+            for pm in pieces:
+                st = im.stats_of(pm)
+                out.append({'rle': im.rle_encode(pm), 'px': st['px'], 'bbox': st['bbox']})
+            self._send(200, {'ok': True, 'pieces': out, 'n': len(out)})
+            return
         else:
             raise ValueError(f'unknown edge op {op}')
         st = im.stats_of(m)
