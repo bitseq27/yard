@@ -83,6 +83,13 @@ mirror is `Heliosoph/midas-small-onnx` on HF; DA-v2 comes from `onnx-community`)
 **Engine rule, amended with the user's approval**: core stays numpy+PIL; `depth_ml` is an
 optional accelerator outside the render/sprite/audit path (plan section 2 rule 11).
 
+**Pushed**: `origin/main` = `29640c2` (the origin's squashed root commit) + `1e9c49c`
+(this full M1-M6e state, rebuilt after two sandbox resets dropped `.git` — the hashes
+cited above, 99263d1/5a34cd7/42bbf86/5a2b2e8, lived only in lost sandboxes). Also fixed
+here: `dl_models.py` now pulls MiDaS from the Heliosoph HF mirror (the isl-org release
+assets 404), and `depth_ml.MODELS` gained the fp32 DA twin as a fallback for installs
+where the quant file is missing.
+
 ---
 
 ## 2026-10-31 — Entry 15: M6c — undo/redo buttons, icon rail + select tool, view tabs, normal map
