@@ -68,13 +68,27 @@ def _ort_wheel():
     with urllib.request.urlopen('https://pypi.org/pypi/onnxruntime/json',
                                 timeout=60) as r:
         meta = json.load(r)
+    import sys
+    import platform
+    ver = f'cp{sys.version_info.major}{sys.version_info.minor}'
+    sysname, machine = platform.system().lower(), platform.machine().lower()
+    plat = ('manylinux' if sysname == 'linux' else
+            'macosx' if sysname == 'darwin' else 'win') if sysname else ''
+    mach = ('x86_64' if machine in ('x86_64', 'amd64') else
+            'arm64' if machine in ('arm64', 'aarch64') else machine)
     url = None
-    for f in meta['urls']:
-        if f['packagetype'] == 'bdist_wheel' and 'cp311' in f['filename'] \
-                and 'manylinux' in f['filename'] and 'x86_64' in f['filename']:
+    for f in meta['urls']:                     # exact platform match first …
+        if f['packagetype'] == 'bdist_wheel' and ver in f['filename'] \
+                and plat in f['filename'] and mach in f['filename']:
             url = f['url']
+    if not url:                                # … then any wheel for this python
+        for f in meta['urls']:
+            if f['packagetype'] == 'bdist_wheel' and ver in f['filename']:
+                url = f['url']
     if not url:
-        raise RuntimeError('no cp311 manylinux x86_64 onnxruntime wheel on pypi')
+        raise RuntimeError(f'no onnxruntime wheel for python {ver} on '
+                           f'{sysname}/{mach} — install onnxruntime yourself and '
+                           f're-run, or set ORT_PATH')
     PROGRESS['stage'] = 'onnxruntime wheel'
     PROGRESS['got'] = 0
     whl = os.path.join(HERE, 'projects', '_ort.whl')

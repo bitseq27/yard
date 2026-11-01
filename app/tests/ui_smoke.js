@@ -250,6 +250,16 @@ async function main() {
     (pingj.depth_ml === 'parse-only' ? /install/.test(mlb.textContent)
                                      : mlb.textContent.includes(pingj.depth_ml)),
     mlb ? mlb.textContent : 'no #mlbtn');
+  const tabBefore = S.tab;
+  mlb.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  for (let i = 0; i < 40 && !/^depth:/.test(mlb.textContent); i++) await wait(100);
+  check('clicking the depth-source button never hijacks the tab bar',
+    S.tab === tabBefore && doc.querySelector('#tabs button[data-tab="masks"]')
+      .getAttribute('aria-pressed') === 'true',
+    `tab=${S.tab} label="${mlb.textContent}"`);
+  check('the install button settles on the live source when models exist',
+    pingj.depth_ml === 'parse-only' || mlb.textContent.includes(pingj.depth_ml),
+    mlb.textContent);
   const mli = await (await fetch(BASE + '/api/depth_ml/install',
     { method: 'POST' })).json();
   check('install endpoint no-ops when the accelerator is present',

@@ -42,6 +42,18 @@ docs §8 rows for the two endpoints.
 with `DEPTH_MODEL=off` (parse-only ping, status agrees, install refuses); ui_smoke
 checks the tab-bar label matches ping in both states. m2–m6 + ui_smoke green.
 
+**Follow-up fix (user: "the install button did not work")**: the button sat inside
+`#tabs`, and the tab bar's own wiring (`querySelectorAll('#tabs button').forEach(b =>
+b.onclick = … setTab …)`) runs *after* the install handler is attached — it clobbered
+it, so a click called `setTab(undefined)` and corrupted the tab state instead of
+installing. Fixed by scoping every tab-bar loop to `#tabs button[data-tab]` and
+guarding `setTab` against unknown tabs; ui_smoke now clicks the button and asserts the
+tab state survives. While in there: the installer picks the onnxruntime wheel for the
+*running* platform (it was cp311-manylinux-x86_64 only — a mac/windows user would have
+hit a cryptic error), and failures now surface in the status line + button title
+instead of a bare "retry". Re-verified in jsdom against a parse-only server: click →
+`installing da_v2_small_quant.onnx N%` with the button disabled during the download.
+
 ---
 
 ## 2026-10-31 — Entry 16: M6e — depth bake-off, model-fused depth pass (optional accelerator)

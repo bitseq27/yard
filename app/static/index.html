@@ -551,7 +551,9 @@ async function mlRefresh() {
     b.disabled = true;
   } else if (j.progress && j.progress.error) {
     b.textContent = 'depth model install failed — click to retry';
+    b.title = j.progress.error;
     b.disabled = false;
+    setStatus('depth model install failed: ' + j.progress.error);
   } else {
     b.textContent = `depth: parse-only — install models (~${j.progress.total_mb} MB)`;
     b.disabled = false;
@@ -574,9 +576,18 @@ async function mlInstall() {
   try {
     const r = await (await fetch('/api/depth_ml/install', { method: 'POST' })).json();
     if (r.already) { S.mlTried = false; fetchDepthMl(); mlRefresh(); return; }
-    if (r.started) mlPoll();
-    else mlRefresh();
-  } catch (e) { b.disabled = false; b.textContent = 'install failed — click to retry'; }
+    if (r.disabled) {
+      b.textContent = 'depth models disabled (DEPTH_MODEL=off)';
+      setStatus('the depth accelerator is disabled by DEPTH_MODEL=off');
+      return;
+    }
+    if (r.started) { setStatus('installing the depth models in the background — ' +
+      'the button shows progress'); mlPoll(); return; }
+    mlRefresh();                               // busy: another install is running
+  } catch (e) {
+    b.disabled = false; b.textContent = 'install failed — click to retry';
+    setStatus('install request failed: ' + e.message);
+  }
 }
 
 /* M6e: the fused depth map is built in a server background thread after upload,
@@ -1039,7 +1050,7 @@ function resetEditor() {
   S.meta = null; S.img = null; S.masks = []; S.sel = -1;
   S.depthImg = null; S.depthMlImg = null; S.orientImg = null; S.normalImg = null;
   S.mlTried = false; S.tab = 'masks';
-  document.querySelectorAll('#tabs button').forEach(b => {
+  document.querySelectorAll('#tabs button[data-tab]').forEach(b => {
     const on = b.dataset.tab === 'masks';
     b.classList.toggle('on', on);
     b.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -1664,8 +1675,9 @@ $('dguard').onclick = e => {
 const TABS = ['masks', 'depth', 'normals', 'anim'];
 function setTab(t) {
   if (!S.img) { setStatus('load an image first'); return; }
+  if (!TABS.includes(t)) return;               // never trust a stray data-tab
   S.tab = t;
-  document.querySelectorAll('#tabs button').forEach(b => {
+  document.querySelectorAll('#tabs button[data-tab]').forEach(b => {
     const on = b.dataset.tab === t;
     b.classList.toggle('on', on);
     b.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -1684,8 +1696,9 @@ function setTab(t) {
   draw();
 }
 function cycleTab() { setTab(TABS[(TABS.indexOf(S.tab) + 1) % TABS.length]); }
-document.querySelectorAll('#tabs button').forEach(b =>
-  b.onclick = () => setTab(b.dataset.tab));
+document.querySelectorAll('#tabs button[data-tab]').forEach(b =>
+  b.onclick = () => setTab(b.dataset.tab));   // [data-tab]: #mlbtn lives in the bar
+                                              // but keeps its own install handler
 
 let spaceDown = false;
 window.addEventListener('keydown', e => {
