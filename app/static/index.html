@@ -40,6 +40,8 @@
           font-size:11px; padding:4px 10px; border-radius:6px; cursor:pointer;
           display:flex; gap:5px; align-items:center; }
   #tabs button:hover { color:var(--txt); background:#262630; }
+  #tabs #mlbtn { margin-left:auto; opacity:.75; font-size:11px; }
+  #tabs #mlbtn.on { opacity:1; }
   #tabs button.on { background:#2f4a3f; color:#c9f5e2; }
   #tabs svg { width:13px; height:13px; }
   .railsep { width:100%; height:1px; background:var(--line); margin:3px 0; }
@@ -229,6 +231,9 @@
       <button data-tab="anim" aria-pressed="false" title="Rendered loop, playing in place (renders on first
         open if needed)">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M5 3.5 12 8l-7 4.5Z"/></svg>anim</button>
+      <button id="mlbtn" title="Depth-pass source. On a fresh clone the monocular
+        depth models are not in the repo (~120 MB, gitignored) — click to install them
+        and the depth tab switches to the model-fused map.">depth: …</button>
     </div>
     <canvas id="view"></canvas>
     <div id="hint">No image loaded.<br>Drop a pixel-art PNG here, or click “Load image”.<br>
@@ -529,6 +534,51 @@ function tabPlaceholder(msg) {
   ctx.fillText(msg, canvas.width / 2, canvas.height / 2);
   ctx.textAlign = 'start';
 }
+/* M6e one-click accelerator: the tab bar shows the depth-pass source; on a fresh
+   clone (no onnxruntime/models in the repo) it offers the ~120 MB install and shows
+   download progress, then swaps the depth tab to the fused map by itself. */
+let ML_TIMER = 0;
+async function mlRefresh() {
+  let j = null;
+  try { j = await (await fetch('/api/depth_ml/status')).json(); } catch (e) { return null; }
+  const b = $('mlbtn');
+  if (!b) return j;
+  if (j.source !== 'parse-only') {
+    b.textContent = 'depth: ' + j.source;
+    b.classList.add('on'); b.disabled = true;
+  } else if (j.progress && j.progress.running) {
+    b.textContent = `installing ${j.progress.stage} ${j.progress.pct}%`;
+    b.disabled = true;
+  } else if (j.progress && j.progress.error) {
+    b.textContent = 'depth model install failed — click to retry';
+    b.disabled = false;
+  } else {
+    b.textContent = `depth: parse-only — install models (~${j.progress.total_mb} MB)`;
+    b.disabled = false;
+  }
+  return j;
+}
+function mlPoll() {
+  clearInterval(ML_TIMER);
+  ML_TIMER = setInterval(async () => {
+    const j = await mlRefresh();
+    if (j && !(j.progress && j.progress.running)) {
+      clearInterval(ML_TIMER);
+      if (j.source !== 'parse-only') { S.mlTried = false; fetchDepthMl(); }
+    }
+  }, 800);
+}
+async function mlInstall() {
+  const b = $('mlbtn');
+  b.disabled = true; b.textContent = 'starting install…';
+  try {
+    const r = await (await fetch('/api/depth_ml/install', { method: 'POST' })).json();
+    if (r.already) { S.mlTried = false; fetchDepthMl(); mlRefresh(); return; }
+    if (r.started) mlPoll();
+    else mlRefresh();
+  } catch (e) { b.disabled = false; b.textContent = 'install failed — click to retry'; }
+}
+
 /* M6e: the fused depth map is built in a server background thread after upload,
    so it is fetched lazily (open + first visit to the depth tab) and a missing one
    simply leaves the parse map on screen. */
@@ -1007,6 +1057,8 @@ function resetEditor() {
   history.replaceState(null, '', location.pathname);
 }
 $('hundo').onclick = () => undo();
+if ($('mlbtn')) $('mlbtn').onclick = () => mlInstall();
+mlRefresh();
 $('hredo').onclick = () => redo();
 $('helpbtn').onclick = () => $('help').classList.toggle('on');
 $('helpclose').onclick = () => $('help').classList.remove('on');
@@ -1618,7 +1670,7 @@ function setTab(t) {
     b.classList.toggle('on', on);
     b.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
-  if (t === 'depth') fetchDepthMl();
+  if (t === 'depth') { fetchDepthMl(); mlRefresh(); }
   if (t === 'anim') {
     if (!PV.strip || !PV.N) { doRender().then(() => { if (S.tab === 'anim') pvPlay(true); }); }
     else pvPlay(true);

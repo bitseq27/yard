@@ -22,6 +22,28 @@ artifacts from the origin session (`courtyard_animated.gif/.mp4`, `segmentation_
 
 ---
 
+## 2026-10-31 — Entry 17: M6e follow-up — the accelerator installs itself
+
+**Why**: user cloned the repo fresh, launched, and the depth pass was still flat —
+correctly so (models + onnxruntime are gitignored, ~120 MB), but nothing in the app
+said so. Silence is a bug: the parse-only fallback now announces itself.
+
+**Shipped**: `app/install_depth_models.py` (stdlib installer with byte progress);
+`GET /api/depth_ml/status` + `POST /api/depth_ml/install` (background thread, single
+flight, `already|started|busy|disabled` answers, refuses while `DEPTH_MODEL=off`);
+the tab bar's right end shows the depth-pass source and, when parse-only, an
+`install models (~120 MB)` button with live percent that swaps the depth tab to the
+fused map by itself when the download lands; `server.py --fetch-depth-models` for
+headless setups and a boot log line naming the source plus the hint; new `README.md`
+quick-start (the repo had none — part of why the fresh-clone path was unclear);
+docs §8 rows for the two endpoints.
+
+**Verified**: test_m6 adds status/install no-op checks plus a second server booted
+with `DEPTH_MODEL=off` (parse-only ping, status agrees, install refuses); ui_smoke
+checks the tab-bar label matches ping in both states. m2–m6 + ui_smoke green.
+
+---
+
 ## 2026-10-31 — Entry 16: M6e — depth bake-off, model-fused depth pass (optional accelerator)
 
 **Complaint that started it**: "the depth pass is flat". Confirmed against the origin

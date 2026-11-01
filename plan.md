@@ -198,6 +198,11 @@ under alpha 0, plate identical to the art outside every mask.
     image; iso-physical interior ramps contradict the reference (rho .556 -> .02).
     *Accept:* test_m6 58 checks (fused rho >= .75 and >= parse + .10; upload < 2 s with
     the accelerator armed: 673 ms; graceful None without runtime) + ui_smoke 106.
+    Follow-up (entry 17): a fresh clone boots parse-only because the ~120 MB
+    accelerator is gitignored, and nothing said so — the tab bar now shows the
+    depth-pass source with a one-click installer (`/api/depth_ml/install`, progress in
+    `/api/depth_ml/status`), plus `server.py --fetch-depth-models` and a README
+    quick-start.
   - **M6d (open)** — shading-aware inpaint from the orientation field + a light direction
     inferred from the art's own highlight/shadow placement; optional `relight` clip type
     consuming the M6c normal map.

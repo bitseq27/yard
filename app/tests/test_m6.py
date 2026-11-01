@@ -361,6 +361,14 @@ def main():
 
         ping = json.loads(urllib.request.urlopen(BASE + '/api/ping', timeout=5).read())
         check('ping reports the depth-pass source', ping.get('depth_ml') == src, src)
+        code, straw = req('/api/depth_ml/status')
+        stj = json.loads(straw.decode()) if code == 200 else {}
+        check('GET /api/depth_ml/status reports source + idle progress',
+              code == 200 and stj.get('source') == src and
+              stj.get('progress', {}).get('running') is False, str(code))
+        code, iraw = req('/api/depth_ml/install', body={})
+        check('POST /api/depth_ml/install no-ops when models exist',
+              code == 200 and json.loads(iraw.decode()).get('already') is True, str(code))
         nat_arr = np.asarray(Image.open(natp)).astype(np.uint8)
         ml_path = os.path.join(ROOT, 'app', 'projects', pid, 'depth_ml.png')
         if src != 'parse-only':
@@ -447,6 +455,36 @@ def main():
     finally:
         srv.terminate()
         srv.wait(timeout=10)
+
+    print('\nM6e depth-pass switch — DEPTH_MODEL=off forces the parse-only path')
+    env = dict(os.environ, DEPTH_MODEL='off')
+    port2 = PORT + 7
+    srv2 = subprocess.Popen([sys.executable, 'server.py', str(port2)],
+                            cwd=os.path.join(ROOT, 'app'), env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        base2 = f'http://127.0.0.1:{port2}'
+        for _ in range(60):
+            try:
+                urllib.request.urlopen(base2 + '/api/ping', timeout=2)
+                break
+            except OSError:
+                time.sleep(0.25)
+        pj = json.loads(urllib.request.urlopen(base2 + '/api/ping', timeout=5).read())
+        check('DEPTH_MODEL=off boots parse-only', pj.get('depth_ml') == 'parse-only',
+              str(pj.get('depth_ml')))
+        with urllib.request.urlopen(base2 + '/api/depth_ml/status', timeout=5) as r:
+            st2 = json.loads(r.read())
+        check('status endpoint agrees while off', st2.get('source') == 'parse-only')
+        rq = urllib.request.Request(base2 + '/api/depth_ml/install', data=b'{}',
+                                    headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(rq, timeout=5) as r:
+            ij = json.loads(r.read())
+        check('install refuses while DEPTH_MODEL=off', ij.get('disabled') is True,
+              str(ij))
+    finally:
+        srv2.terminate()
+        srv2.wait(timeout=10)
 
     print()
     if FAILS:

@@ -215,6 +215,10 @@ Target engine is a custom web JS engine: plain JSON + PNG is the final format.</
       The derived views come from the art alone: a project uploaded before they existed
       rebuilds the file on the first GET instead of 404ing (depth_ml.png rebuilds only
       when the accelerator is installed).</td></tr>
+  <tr><td>GET /api/depth_ml/status</td><td>→ {source, progress} — depth-pass source and
+      the one-click installer's download progress</td></tr>
+  <tr><td>POST /api/depth_ml/install</td><td>{} → {already|started|busy|disabled} —
+      fetches onnxruntime + the two onnx models (~120 MB) in a background thread</td></tr>
   <tr><td>GET /api/mask/&lt;pid&gt;/&lt;id&gt;.png</td><td>one mask, grayscale PNG</td></tr>
 </table>
 <p>Errors come back as <code>{error}</code> with 4xx/5xx; <b>429</b> means
@@ -319,8 +323,11 @@ Target engine is a custom web JS engine: plain JSON + PNG is the final format.</
   <li><b>Depth tab looks flat / banded</b> — that is the parse field (ground-row plates).
       With the optional accelerator installed (build_log Setup: <code>python3
       app/tests/dl_models.py</code>) the tab shows the model-fused map instead; the first
-      visit may take ~5 s while it fuses. <code>DEPTH_MODEL=midas</code> swaps in the
-      0.4 s model, <code>DEPTH_MODEL=off</code> forces the parse.</li>
+      visit may take ~5 s while it fuses. On a fresh clone the models are not in the
+      repo: the right end of the tab bar then offers a one-click install (~120 MB, with
+      progress), or run <code>python3 server.py --fetch-depth-models</code>.
+      <code>DEPTH_MODEL=midas</code> swaps in the 0.4 s model,
+      <code>DEPTH_MODEL=off</code> forces the parse.</li>
 </ul>
 
 <p class="dim" style="margin-top:40px">Pixel Sway — milestones M1–M6 complete.

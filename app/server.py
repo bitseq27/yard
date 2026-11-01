@@ -40,6 +40,12 @@ from urllib.parse import urlparse, parse_qs
 import numpy as np
 from PIL import Image
 
+try:
+    import install_depth_models as dim
+except ImportError:                       # imported as a module, not run from app/
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import install_depth_models as dim
 from engine import depth_ml, imaging as im
 from engine import segment, animate, export, depth
 
@@ -354,6 +360,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {'ok': True, 'milestone': MILESTONE, 'engine': ENGINE_V,
                               'depth_ml': depth_ml.source()})
             return
+        if u.path == '/api/depth_ml/status':
+            self._send(200, {'source': depth_ml.source(), 'progress': dim.status()})
+            return
         if u.path in ('/', '/index.html'):
             with open(os.path.join(ROOT, 'static', 'index.html'), 'rb') as f:
                 self._send(200, f.read(), 'text/html; charset=utf-8')
@@ -420,6 +429,18 @@ class Handler(BaseHTTPRequestHandler):
     # -- POST ---------------------------------------------------------------
     def do_POST(self):
         u = urlparse(self.path)
+        if u.path == '/api/depth_ml/install':
+            # M6e one-click accelerator: download onnxruntime + the two onnx models
+            if os.environ.get('DEPTH_MODEL', '').lower() == 'off':
+                self._send(200, {'ok': False, 'disabled': True})
+            elif depth_ml.available():
+                self._send(200, {'ok': True, 'already': True,
+                                  'source': depth_ml.source()})
+            elif dim.install_async():
+                self._send(200, {'ok': True, 'started': True})
+            else:
+                self._send(200, {'ok': True, 'busy': True})
+            return
         # always drain the body first: an unread body desyncs the next request on a
         # keep-alive connection (M4 ledger: 404-on-unknown-route left bytes behind and
         # a later response parsed as HTML)
@@ -782,7 +803,16 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     import sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    args = [a for a in sys.argv[1:]]
+    if '--fetch-depth-models' in args:
+        args.remove('--fetch-depth-models')
+        ok = dim.install()
+        print('depth models:', 'installed' if ok else dim.status()['error'], flush=True)
+    port = int(args[0]) if args else 8000
     srv = ThreadingHTTPServer(('0.0.0.0', port), Handler)
+    src = depth_ml.source()
     print(f'Pixel Sway {MILESTONE} listening on {port}', flush=True)
+    print('depth pass: ' + src + ('' if src != 'parse-only' else
+          ' — the depth tab offers a one-click model install (~120 MB), or run '
+          '`python3 server.py --fetch-depth-models`'), flush=True)
     srv.serve_forever()

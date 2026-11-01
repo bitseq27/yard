@@ -245,6 +245,15 @@ async function main() {
   const pingj = await (await fetch(BASE + '/api/ping')).json();
   check('ping reports the depth-pass source', typeof pingj.depth_ml === 'string',
     pingj.depth_ml);
+  const mlb = doc.getElementById('mlbtn');
+  check('tab bar shows the depth-pass source (or the install offer)', !!mlb &&
+    (pingj.depth_ml === 'parse-only' ? /install/.test(mlb.textContent)
+                                     : mlb.textContent.includes(pingj.depth_ml)),
+    mlb ? mlb.textContent : 'no #mlbtn');
+  const mli = await (await fetch(BASE + '/api/depth_ml/install',
+    { method: 'POST' })).json();
+  check('install endpoint no-ops when the accelerator is present',
+    mli.already === true || pingj.depth_ml === 'parse-only', JSON.stringify(mli));
 
   check('tab bar replaces the old overlay cycle button', !!doc.getElementById('tabs') &&
     !doc.getElementById('oview') && ['masks', 'depth', 'normals', 'anim'].every(v => !!tabBtn(v)),

@@ -11,3 +11,5 @@ app/projects/*/
 !app/projects/85b9aa6e/
 app/tests/_ort/
 app/tests/models/
+app/models/
+app/_ort/
