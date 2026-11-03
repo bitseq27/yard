@@ -241,6 +241,8 @@ Exports:
 3. scene bundle: `plate.png`, `walkmask.png`, `palette.png`, `scene.json` (anchors, depths, bboxes)
 4. M5: atlas packing (target engine is a custom web JS engine → plain JSON + PNG sheets
    is the final format; no engine adapters needed)
+5. M7: depth-band layers + depthmap (§8b) — `layers/L<i>.png`, `depthmap.png`,
+   `scene.json.layers` + per-object `band`/`foot`/`depth_n` (`layers=0` opts out)
 
 Clip conventions:
 - loops seamless (integer cycles); per-instance variety = engine-side start-frame offset (free)
@@ -248,6 +250,38 @@ Clip conventions:
 - extraction: sprite = mask ∩ source as RGBA; plate hole inpainted; overlapping connected
   objects → user chooses combine-or-split at a cut line
 - shadows: optional separate shadow sprite (shadow-sync code from origin session), not baked
+
+## 8b. Depth layers — preparing a scene to be walked around (M7, 2026-11-03)
+
+The §8 bundle answers "what are the objects"; a scene characters move through also
+needs "what occludes what, where". The depth field (M6a parse, fused with Depth
+Anything 3 when the optional accelerator is installed — entry 18) answers that per
+pixel; `engine/layers.py` repackages field + art + objects into game-ready layers:
+
+- **bands** — k depth bands (2..6, default 3) by 1-D k-means on the closeness
+  histogram, ordered far (0) → near (k-1); deterministic per field + k.
+- **plates** — one RGBA plate per band: member pixels are the original art; the
+  footprints of everything nearer (nearer bands + object masks) are inpainted with
+  the proven animate.inpaint chain as *disocclusion backing*; farther-band pixels
+  stay transparent. Contract (pinned in test_m7): compose L0→L{k-1} and draw each
+  object's sheet after its band's plate ⇒ the native art, pixel-exact. When a
+  sprite sways, a character crosses, or the camera parallaxes, revealed holes show
+  backing instead of transparency.
+- **objects** — band taken at the FEET (97th-percentile ground row, the same rule
+  as the z sort key), plus `depth_n` = normalised foot closeness for smooth y-sort
+  *inside* a band and a foot(x,y) anchor. A walking character is inserted between
+  plates by comparing its foot depth to the band cuts.
+- **walkmask + depthmap** — the walkable default (§8, M4-editable) plus the u8
+  closeness field itself (`depthmap.png`): engines that want per-pixel occlusion
+  sample it at the character's foot pixel instead of banding.
+- **segmentation help** — the bands come back from `POST /api/layers_regions` as
+  editable region suggestions (same import flow as auto-seg: tick, fix, keep);
+  the M6b wand depth-guard and `depthsplit` consume the same field, so a better
+  depth model improves every mask tool for free.
+
+Editor surface: a `layers` tab (band tint over the art, far cool → near warm) and a
+Layers panel (band count, build, "as regions"). Depth source override:
+`DEPTH_MODEL=da3|da|midas|off`.
 
 ## 9. Out of scope (for now)
 

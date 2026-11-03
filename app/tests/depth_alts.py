@@ -7,7 +7,8 @@ harness scores alternative depth solutions against that ground truth:
               · lum (box-mean luminance, the naive proxy)
               · hybrid λ (m6a or iso3 + λ·high-pass(sfs): layout from the parse,
                 relief from the shading)
-  models      Depth Anything V2 small (onnx, fp32 + int8), MiDaS v3.1 small if
+  models      Depth Anything V3 small (onnx fp32, folded-preprocess uint8 NHWC),
+              Depth Anything V2 small (onnx, fp32 + int8), MiDaS v3.1 small if
               present — evaluation only, NEVER in the engine (numpy+PIL rule)
 
 Metrics vs depth.npy (higher = nearer for all of them):
@@ -96,30 +97,32 @@ def _ort_session(path):
     return ort.InferenceSession(path, so, providers=['CPUExecutionProvider'])
 
 
-def _prep(img, size, mean, std):
-    a = img.resize((size, size), Image.BILINEAR)
-    a = np.asarray(a, np.float32) / 255.0
-    a = (a - np.array(mean, np.float32)) / np.array(std, np.float32)
-    return np.transpose(a, (2, 0, 1))[None].astype(np.float32)
-
-
 IMNET = ((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 
 
 def run_model(path, nat, size=518, norm=IMNET):
+    """Run an onnx depth model. Two input contracts are auto-detected from the
+    session (DA3 exports ship either): float32 NCHW ImageNet-normalised, or the
+    'folded preprocess' uint8 NHWC 0..255 (normalisation inside the graph)."""
     sess = _ort_session(path)
     if sess is None:
         return None
     inp, out = sess.get_inputs()[0], sess.get_outputs()[0]
-    img = Image.fromarray(nat).convert('RGB')
-    x = _prep(img, size, *norm)
+    img = Image.fromarray(nat).convert('RGB').resize((size, size), Image.BILINEAR)
+    shp = [d if isinstance(d, int) else size for d in inp.shape]
+    if inp.type == 'tensor(uint8)' or (len(shp) == 4 and shp[-1] == 3):
+        x = np.asarray(img, np.uint8)[None]              # folded: NHWC uint8
+    else:
+        mean, std = norm
+        a = np.asarray(img, np.float32) / 255.0
+        a = (a - np.array(mean, np.float32)) / np.array(std, np.float32)
+        x = np.transpose(a, (2, 0, 1))[None].astype(np.float32)
     t0 = time.time()
     y = sess.run([out.name], {inp.name: x})[0]
     ms = (time.time() - t0) * 1000
-    d = np.asarray(y[0])
-    if d.ndim == 3:
-        d = d[None]
-    d = d[0]
+    d = np.asarray(y[0], np.float32)
+    while d.ndim > 2:
+        d = d[0]
     d = np.asarray(Image.fromarray(d).resize((nat.shape[1], nat.shape[0]),
                                              Image.BILINEAR), np.float64)
     return d, ms
@@ -142,11 +145,12 @@ def candidates(nat, f, with_models, seg=None):
     for lam in (0.5, 1.0, 2.0, 4.0):
         out.append((f'm6a+{lam:g}*hp(sfs)', L(m6a) * 40 + lam * L(hp) * 8, ms_sfs,
                     f'layout m6a + {lam:g}x shading relief'))
-    da = mid = None
+    da = mid = da3 = None
     if with_models:
         for name, fn, kw in (('midas-v21-small', 'midas_v21_small.onnx', {'size': 256}),
                              ('da-v2-small-int8', 'da_v2_small_quant.onnx', {}),
-                             ('da-v2-small', 'da_v2_small.onnx', {})):
+                             ('da-v2-small', 'da_v2_small.onnx', {}),
+                             ('da3-small', 'da3_small.onnx', {})):
             pth = os.path.join(MODELS, fn)
             if not os.path.exists(pth):
                 continue
@@ -155,6 +159,7 @@ def candidates(nat, f, with_models, seg=None):
                 continue
             d, ms = r
             # orient without peeking at gt: in iso art depth grows toward the bottom
+            # (DA3's raw output is far=large, so this flips it — same rule for all)
             if np.corrcoef(d.ravel(), ys.ravel())[0, 1] < 0:
                 d = -d
             out.append((name, d, ms, 'onnx monocular depth, evaluation only'))
@@ -162,6 +167,19 @@ def candidates(nat, f, with_models, seg=None):
                 da = d
             if name == 'midas-v21-small':
                 mid = d
+            if name == 'da3-small':
+                da3 = d
+        if da3 is not None:
+            hp3 = highpass(da3)
+            for w in (0.6, 0.8, 0.9):
+                out.append((f'fuse3-{w:g}', w * znorm(da3) + (1 - w) * znorm(m6a), 0.0,
+                            f'rank-free blend: {w:g} DA3 + {1-w:g} m6a (std-normalised)'))
+            for lam in (0.5, 1.0, 2.0):
+                out.append((f'm6a+{lam:g}*hp(DA3)', L(m6a) * 40 + lam * L(hp3) * 8, 0.0,
+                            f'm6a layout + {lam:g}x DA3 relief (facade detail)'))
+            for lam in (0.5, 1.0):
+                out.append((f'iso3+{lam:g}*hp(DA3)', L(iso3) * 40 + lam * L(hp3) * 8, 0.0,
+                            f'iso3 layout + {lam:g}x DA3 relief'))
         if da is not None:
             hpd = highpass(da)
             for w in (0.3, 0.5, 0.7):

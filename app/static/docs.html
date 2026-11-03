@@ -206,23 +206,52 @@ Target engine is a custom web JS engine: plain JSON + PNG is the final format.</
       leave the seed's ground-row band (M6b)</td></tr>
   <tr><td>POST /api/render</td><td>{pid, N, fps} → {strip, cols, fw, fh, audit, ms, cached, total_ms}</td></tr>
   <tr><td>POST /api/gif</td><td>{pid, N, fps, scale, colors} → {url, bytes, audit, warn?}</td></tr>
-  <tr><td>POST /api/bundle</td><td>{pid, N, fps, colors, atlas} → {url, bytes, sheets, atlas_pages, audit}</td></tr>
+  <tr><td>POST /api/bundle</td><td>{pid, N, fps, colors, atlas, layers?} → {url, bytes,
+      sheets, atlas_pages, layers, audit} — <code>layers</code> defaults to 1 and
+      includes the built depth-band plates + depthmap (M7)</td></tr>
+  <tr><td>POST /api/layers</td><td>{pid, k?, source?, force?} → {k, cuts, centers,
+      source, bands:[{i,lo,hi,px,file}], objects:[{id,name,band,foot_x,foot_y,
+      foot_depth,depth_n}], ms} — depth-band plates (M7); cached while the field
+      key + k + source hold; <code>source:"parse"</code> skips the model</td></tr>
+  <tr><td>GET /api/layers/&lt;pid&gt;</td><td>the cached layer meta, or 404 when the
+      project has none built</td></tr>
+  <tr><td>POST /api/layers_regions</td><td>{pid} → auto-seg-shaped suggestions for the
+      built bands (kind=region) — depth-driven segmentation, import like any
+      suggestion</td></tr>
   <tr><td>GET /api/out/&lt;pid&gt;/…</td><td>strip.png · preview.gif · bundle.zip (whitelist)</td></tr>
   <tr><td>GET /api/image/&lt;pid&gt;/…</td><td>native.png · original.png · depth.png (M6a
       closeness map) · orient.png (M6b surface tint: wall red, ground green, object
-      blue) · normal.png (M6c tangent-space bump map) · depth_ml.png (M6e model-fused
-      closeness, present only when the server has the optional depth accelerator).
+      blue) · normal.png (M6c tangent-space bump map) · depth_ml.png (M6e/M7
+      model-fused closeness, DA3 first, present only when the server has the optional
+      depth accelerator) · layers_preview.png + layers_overlay.png +
+      layers/L&lt;i&gt;.png (M7 built plates and previews).
       The derived views come from the art alone: a project uploaded before they existed
       rebuilds the file on the first GET instead of 404ing (depth_ml.png rebuilds only
       when the accelerator is installed).</td></tr>
   <tr><td>GET /api/depth_ml/status</td><td>→ {source, progress} — depth-pass source and
       the one-click installer's download progress</td></tr>
   <tr><td>POST /api/depth_ml/install</td><td>{} → {already|started|busy|disabled} —
-      fetches onnxruntime + the two onnx models (~120 MB) in a background thread</td></tr>
+      fetches onnxruntime + the three onnx models (~220 MB) in a background thread</td></tr>
   <tr><td>GET /api/mask/&lt;pid&gt;/&lt;id&gt;.png</td><td>one mask, grayscale PNG</td></tr>
 </table>
 <p>Errors come back as <code>{error}</code> with 4xx/5xx; <b>429</b> means
 “busy — retry shortly” (§10). Hostile pids 404 (path traversal is rejected).</p>
+
+<h2 id="layers">8b · Depth layers for walkable scenes (M7)</h2>
+<p>The bundle's plate/walkmask/sheets say <i>what the objects are</i>; a scene that
+characters walk through also needs <i>what occludes what</i>. <code>POST
+/api/layers</code> bands the fused depth field (1-D k-means, k=2..6, far 0 → near
+k−1) and cuts one RGBA plate per band: member pixels are the original art, every
+nearer footprint (nearer bands + object masks) is inpainted as disocclusion backing,
+farther pixels stay transparent. Composing <code>layers/L0.png … L{k-1}.png</code>
+far→near and drawing each object's sheet after its band's plate reproduces the
+native art pixel-exactly (test_m7 pins it), and a walking character is inserted
+between plates by comparing its foot depth to <code>cuts</code> — or per-pixel, by
+sampling <code>depthmap.png</code> (u8 closeness, higher = nearer) at its foot. The
+bundle carries both plus <code>scene.json.layers</code> and per-object
+<code>band</code>/<code>foot</code>/<code>depth_n</code>. The same bands come back
+from <code>POST /api/layers_regions</code> as editable region masks, which is the
+depth-driven segmentation path; plan.md §8b has the full contract.</p>
 
 <h2 id="engine">9 · Engine rules</h2>
 <ol>
@@ -256,15 +285,18 @@ Target engine is a custom web JS engine: plain JSON + PNG is the final format.</
       (z ≥ 0.75, B ≥ 223); courtyard tilt sd 13.8/128. Shipped as <code>normal.png</code>
       per project and shown in the normals tab; a shading-aware inpaint or a
       <code>relight</code> clip type would consume the same map later.</li>
-  <li><b>Depth accelerator is optional</b> (M6e) — the parse field (§9.9) reads flat next
+  <li><b>Depth accelerator is optional</b> (M6e, M7) — the parse field (§9.9) reads flat next
       to real depth (piecewise plates, no facade), and monocular models fix layout but
-      blur interiors (bake-off: app/tests/depth_alts.py — DA-v2-small rho .804 vs parse
-      .556/.688, within-object order the other way round). So the depth TAB can show a
-      blend, w·model + (1−w)·parse with w picked by a documented rule (DA-v2-int8 0.8,
-      MiDaS-v21 0.6), computed by <code>engine/depth_ml.py</code> in a background thread
-      at upload and served as <code>depth_ml.png</code>. onnxruntime is imported lazily
-      and only when a model file exists; without it every byte stays numpy+PIL (rule 11)
-      and the tab shows the parse. No tested solution recovers facade relief from a
+      blur interiors (bake-off: app/tests/depth_alts.py — DA3-small rho .887, DA-v2-small
+      .848, MiDaS-v21 .822 vs parse .556/.688, within-object order the other way round).
+      So the depth TAB can show a blend, w·model + (1−w)·parse with w picked by a
+      documented rule (DA3 0.9, DA-v2-int8 0.8, MiDaS-v21 0.6), computed by
+      <code>engine/depth_ml.py</code> in a background thread at upload and served as
+      <code>depth_ml.png</code>. DA3's raw output is far=large (the opposite sign of
+      DA-v2's disparity-style map), so each model entry carries an explicit orientation.
+      onnxruntime is imported lazily and only when a model file exists; without it every
+      byte stays numpy+PIL (rule 11) and the tab shows the parse. The same fused field
+      drives the M7 layer plates (§8b). No tested solution recovers facade relief from a
       single pixel-art image — that negative result is measured, not assumed.</li>
 </ol>
 
@@ -284,17 +316,19 @@ Target engine is a custom web JS engine: plain JSON + PNG is the final format.</
   <li><b>Sprite build</b>: pieces blit through cached flat-index tables per integer
       offset, and frames whose offset pattern repeats are memoised — a frame costs a
       handful of numpy assignments, not a python loop over runs.</li>
-  <li><b>Depth accelerator</b> (M6e, optional): the model fuse (DA-v2-int8 ~4.5 s,
-      MiDaS ~0.4 s, CPU) runs in a background thread after upload so the &lt;2 s upload
-      budget holds (measured 673 ms armed); the editor lazy-fetches depth_ml.png and a
-      still-fusing project answers 404 rather than double-running the model.</li>
+  <li><b>Depth accelerator</b> (M6e/M7, optional): the model fuse (DA3-small ~5 s,
+      DA-v2-int8 ~4.5 s, MiDaS ~0.4 s, CPU) runs in a background thread after upload so
+      the &lt;2 s upload budget holds (measured 673 ms armed); the editor lazy-fetches
+      depth_ml.png. One <code>_FUSE_LOCK</code> single-flights the model: a layers build
+      that lands while the upload fuse is running waits for it and reuses the cached
+      bytes instead of opening a second DA3 session (double RAM, same output).</li>
 </ul>
 
 <h2 id="keys">11 · Keyboard shortcuts</h2>
 <table>
   <tr><th><span class="kbd">B</span> / <span class="kbd">W</span> / <span class="kbd">A</span></th><td>brush / wand / auto-seg</td></tr>
   <tr><th><span class="kbd">V</span></th><td>select tool: pick the mask under the cursor (⇧ = 3-px ring search)</td></tr>
-  <tr><th><span class="kbd">D</span></th><td>cycle the view tabs: masks → depth → normals → anim</td></tr>
+  <tr><th><span class="kbd">D</span></th><td>cycle the view tabs: masks → depth → layers → normals → anim</td></tr>
   <tr><th><span class="kbd">Ctrl+Z</span> / <span class="kbd">Ctrl+⇧Z</span></th><td>undo / redo (the header ↶ ↷ buttons mirror the same history and show its depth)</td></tr>
   <tr><th><span class="kbd">P</span></th><td>play/pause the strip</td></tr>
   <tr><th><span class="kbd">,</span> / <span class="kbd">.</span></th><td>step frame back / forward</td></tr>

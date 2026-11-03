@@ -6,13 +6,83 @@ decisions taken, problems hit + fixes, and anything a future session must know
 
 ---
 
+## 2026-11-03 — Entry 18: M7 — Depth Anything 3 depth pass + depth-band layers for game scenes
+
+**Why**: two asks in one. (1) The depth map still read flat on fresh clones — the
+shipped accelerator was DA-v2-small (bake-off rho 0.848, wflat 0.22 vs the parse's
+0.556/0.42), and Depth Anything 3 measures clearly better on this art. (2) The
+scene has to be packaged for a game where characters walk around it: occlusion
+layers, y-sort data and walkable ground, not just one depth image.
+
+**Measured** (`app/tests/depth_alts.py --models`, vs the origin depth.npy):
+
+| candidate | rho | conc | rho_in | wallrho | wflat (gt 0.20) | CPU |
+|---|---|---|---|---|---|---|
+| m6a parse | 0.556 | 0.728 | 0.703 | -0.166 | 0.42 | 0 |
+| da-v2-small-int8 (old shipped) | 0.848 | 0.866 | 0.431 | +0.209 | 0.22 | 4.4 s |
+| da3-small fp32 | 0.887 | 0.887 | 0.403 | +0.240 | 0.22 | 4.8 s |
+| **fuse da3 w=0.9 (shipped)** | 0.885 | 0.886 | 0.455 | +0.246 | 0.23 | — |
+
+Fusion weight from the standing documented rule (max rho+conc+wallrho s.t.
+rho_in >= 0.40 vs the art-only parse): w=0.9 scores 2.017, just over raw DA3's
+2.014 — the parse share buys interior ordering at no layout cost. The thing that
+moved most is the flatness complaint: wflat 0.42 -> 0.23 against the gt's 0.20.
+
+**Decisions**: DA3 **fp32** small, not the 37 MB int8 export — the exporter's own
+validation shows dynamic int8 quantisation flattens backgrounds (spearman down to
+0.35), which is the exact symptom we are curing. DA3-SMALL is Apache-2.0; the
+any-view Large/Giant checkpoints are CC-BY-NC and stay out. The onnx export is
+depth-only (no sky/conf head) with a fixed 518² trace (ViT position embeddings
+baked) — resize in, resize out, like the other models.
+
+**Shipped**:
+- `engine/depth_ml.py`: DA3 first in MODELS with an explicit orientation entry
+  (DA3's raw output is far=large — the opposite sign of DA-v2's disparity-style
+  map); onnx input contract auto-detected (folded-preprocess uint8 NHWC vs float
+  NCHW); `DEPTH_MODEL=da3|da|midas|off`; VERSION `m7-da3-0.9`.
+- `install_depth_models.py` + `tests/dl_models.py`: da3_small.onnx (~101 MB,
+  zerochocobo/DepthAnything3_ONNX, matches PyTorch to ~1e-5) ahead of the DA-v2
+  and MiDaS fallbacks; the install button now says ~218 MB.
+- `engine/layers.py` (new): 1-D k-means over the depth histogram -> k bands
+  (far 0 -> near k-1, deterministic); per-band RGBA plates whose member pixels
+  are the original art, whose nearer footprints (bands + object masks) are
+  inpainted with the proven animate.inpaint chain as disocclusion backing, and
+  whose farther pixels stay transparent — so composing plates far->near and
+  drawing each object's sheet after its band's plate recomposes the art
+  PIXEL-EXACTLY (pinned in test_m7); objects banded at their feet (97th-pct
+  ground row) with a continuous depth_n for smooth y-sort inside a band; tint
+  overlay + strip previews.
+- server: `POST /api/layers {pid,k}` (cached on field-key+k+source),
+  `GET /api/layers/<pid>`, `POST /api/layers_regions` (bands back as editable
+  region suggestions — depth-driven segmentation in the same import flow as
+  auto-seg), `GET /api/image/<pid>/layers/L<i>.png|layers_preview.png|
+  layers_overlay.png`; `_FUSE_LOCK` single flight — an upload-time background
+  fuse and a layers build used to run two DA3 sessions concurrently (double RAM,
+  same bytes; it took the server down once under load).
+- bundle: `layers/L*.png` + `depthmap.png` (u8 closeness — sample at a
+  character's foot pixel for y-sort) + `scene.json.layers` contract + per-object
+  `band`/`foot`/`depth_n`; `layers=0` opts out.
+- editor: a `layers` tab (band tint over the art), a Layers panel (band count,
+  build, "as regions"), bundle status names the layer count.
+- tests: `test_m7.py` (banding math, plate rules + exact recomposition, server
+  routes, region import, bundle contract); `depth_alts.py` scores DA3 and the
+  DA3 fusions in the bake-off.
+
+**Notes for future sessions**: DA3 inference ~5 s on CPU in a background thread
+(upload budget untouched); the parse path is still the no-model fallback and
+still layers fine (test_m7 runs it); `seg_depth.py` at the root remains the
+origin session's courtyard-specific script, untouched.
+
+---
+
 ## Setup (run after any sandbox reset)
 
 ```bash
 apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   python3-pil python3-numpy gifsicle   # add ffmpeg when MP4 export lands
-# optional M6e depth accelerator (onnxruntime + Depth Anything V2 / MiDaS onnx,
-# ~190 MB into gitignored app/tests/{_ort,models}; server works without it):
+# optional depth accelerator (onnxruntime + Depth Anything 3 / V2 + MiDaS onnx,
+# ~220 MB for the server set, ~320 MB with the bake-off extras, into gitignored
+# app/{_ort,models} / app/tests/{_ort,models}; server works without it):
 python3 app/tests/dl_models.py
 ```
 

@@ -275,10 +275,13 @@ async function main() {
   check('D cycles to the depth tab', S.tab === 'depth' &&
     tabBtn('depth').getAttribute('aria-pressed') === 'true', S.tab);
   if (pingj.depth_ml && pingj.depth_ml !== 'parse-only') {
-    for (let i = 0; i < 80 && !S.depthMlImg; i++) await wait(100);
+    for (let i = 0; i < 200 && !S.depthMlImg; i++) await wait(100);
     check('model-fused depth loaded for the depth tab', !!S.depthMlImg,
       `${!!S.depthMlImg} (${pingj.depth_ml})`);
   }
+  key('d');
+  check('D cycles on to the layers tab (M7)', S.tab === 'layers' &&
+    tabBtn('layers').getAttribute('aria-pressed') === 'true', S.tab);
   key('d');
   check('D cycles on to the normals tab', S.tab === 'normals' &&
     tabBtn('normals').getAttribute('aria-pressed') === 'true', S.tab);
@@ -295,6 +298,9 @@ async function main() {
   // ---- M6b: wand guard, surface select, split ------------------------------
   const guardBtn = doc.getElementById('dguard');
   check('rail carries the depth-guard button', !!guardBtn);
+  check('layers panel carries build + as-regions (M7)',
+    !!doc.getElementById('lbuild') && !!doc.getElementById('lregions') &&
+    !!doc.getElementById('lk'));
   guardBtn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
   check('guard cycles to 2 rows', S.dguard === 2 && guardBtn.textContent === 'guard 2',
     `guard=${S.dguard}`);

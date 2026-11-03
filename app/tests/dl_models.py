@@ -64,6 +64,10 @@ def models():
         ('da_v2_small.onnx',
          'https://huggingface.co/onnx-community/depth-anything-v2-small/'
          'resolve/main/onnx/model.onnx'),
+        # M7: DA3 small fp32 (folded-preprocess uint8 NHWC 518², Apache-2.0)
+        ('da3_small.onnx',
+         'https://huggingface.co/zerochocobo/DepthAnything3_ONNX/'
+         'resolve/main/da3_small.onnx'),
     ]
     ok = []
     for name, url in want:

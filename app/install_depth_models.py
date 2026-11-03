@@ -1,17 +1,26 @@
-"""One-click installer for the optional M6e depth accelerator.
+"""One-click installer for the optional depth accelerator (M6e, M7: DA3).
 
-A fresh clone has NO depth models and NO onnxruntime (both gitignored, ~140 MB
+A fresh clone has NO depth models and NO onnxruntime (both gitignored, ~220 MB
 combined), so the depth pass boots parse-only — which reads flat. This module is
 what the editor's "install models" button and `server.py --fetch-depth-models`
 call; it downloads
 
-  onnxruntime wheel   ~24 MB  unpacked into app/_ort
-  Depth Anything V2 q ~27 MB  app/models/da_v2_small_quant.onnx
-  MiDaS v2.1 small    ~66 MB  app/models/midas_v21_small.onnx
+  onnxruntime wheel    ~24 MB  unpacked into app/_ort
+  Depth Anything 3 s  ~101 MB  app/models/da3_small.onnx   (Apache-2.0, fp32,
+                                 folded-preprocess uint8 NHWC 518x518 — the
+                                 shipped depth pass, bake-off rho 0.887)
+  Depth Anything V2 q  ~27 MB  app/models/da_v2_small_quant.onnx (fallback)
+  MiDaS v2.1 small     ~66 MB  app/models/midas_v21_small.onnx   (fast path)
 
 with progress in a module-level PROGRESS dict that GET /api/depth_ml/status
 surfaces. Stdlib only; the engine never imports this (rule 11 keeps engine core
 numpy+PIL — this is installer tooling, like app/tests/dl_models.py).
+
+Why DA3 fp32 and not the 37 MB int8 export: the exporter's own measurements show
+dynamic int8 quantisation flattens backgrounds (spearman down to 0.35 on their
+16-photo validation) — flatness is the exact complaint this installer exists to
+fix. The fp32 trace matches PyTorch to ~1e-5 and still runs in ~5 s on CPU in a
+background thread.
 """
 import json
 import os
@@ -28,6 +37,9 @@ PROGRESS = {'running': False, 'stage': '', 'got': 0, 'total': 0,
             'done': False, 'error': None, 'log': []}
 
 MODELS = (
+    ('da3_small.onnx',
+     'https://huggingface.co/zerochocobo/DepthAnything3_ONNX/'
+     'resolve/main/da3_small.onnx'),
     ('da_v2_small_quant.onnx',
      'https://huggingface.co/onnx-community/depth-anything-v2-small/'
      'resolve/main/onnx/model_quantized.onnx'),
@@ -35,7 +47,7 @@ MODELS = (
      'https://huggingface.co/Heliosoph/midas-small-onnx/resolve/main/'
      'midas_v21_small_256.onnx'),
 )
-TOTAL_MB = 24 + 27 + 66
+TOTAL_MB = 24 + 101 + 27 + 66
 
 
 def _note(msg):

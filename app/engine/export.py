@@ -187,7 +187,8 @@ def walkmask(shape, plans_or_objs, regions):
     return wm
 
 
-def bundle_zip(nat, res, doc, fps=None, scale=1, colors=128, pal=None, atlas=True):
+def bundle_zip(nat, res, doc, fps=None, scale=1, colors=128, pal=None, atlas=True,
+               layers_res=None, depth_u8=None):
     """Scene bundle per plan §8. `res` = animate.render() output.
 
     Returns (zip_bytes, info). Layout:
@@ -198,6 +199,12 @@ def bundle_zip(nat, res, doc, fps=None, scale=1, colors=128, pal=None, atlas=Tru
         objects/<id>.png     RGBA sprite sheets (grid, cols=8) — render sprites verbatim
         atlas_<i>.png        M5: all sheets shelf-packed (scene.json objects[].atlas;
                              oversized sheets keep only their standalone file)
+        depthmap.png         M7: u8 closeness field (higher = nearer) — sample at a
+                             character's feet for smooth y-sorting inside a layer
+        layers/L<i>.png      M7: depth-band plates far->near (layers_res from
+                             engine.layers.separate; each nearer footprint
+                             inpainted as disocclusion backing). Compose far->near,
+                             draw each object's sheet after plate object.band.
     """
     fps = int(fps or res.get('fps') or doc.get('fps') or 12)
     N = int(res['N'])
@@ -233,6 +240,39 @@ def bundle_zip(nat, res, doc, fps=None, scale=1, colors=128, pal=None, atlas=Tru
     files['walkmask.png'] = _png_bytes(wm, 'L')
     files['palette.png'] = _png_bytes(pal.reshape(1, -1, 3), 'RGB')
 
+    if depth_u8 is not None:                 # M7: per-pixel closeness for y-sort
+        dm = np.asarray(depth_u8, np.uint8)
+        if scale and scale > 1:
+            dm = np.asarray(Image.fromarray(dm).resize(
+                (dm.shape[1] * scale, dm.shape[0] * scale), Image.NEAREST))
+        files['depthmap.png'] = _png_bytes(dm, 'L')
+        scene['depthmap'] = {'file': 'depthmap.png',
+                             'note': 'u8 closeness, higher = nearer; sample at a '
+                                     'character foot pixel for y-sort / occlusion'}
+
+    layer_objs = {}
+    if layers_res is not None:
+        lb = []
+        for b in layers_res['bands']:
+            p = b['plate']
+            if scale and scale > 1:
+                p = np.asarray(Image.fromarray(p).resize(
+                    (p.shape[1] * scale, p.shape[0] * scale), Image.NEAREST))
+            fn = f"layers/L{b['i']}.png"
+            files[fn] = _png_bytes(p, 'RGBA')
+            lb.append({'i': int(b['i']), 'lo': int(b['lo']), 'hi': int(b['hi']),
+                       'px': int(b['px']), 'file': fn})
+        for e in layers_res.get('objects', []):
+            if e.get('id') is not None:
+                layer_objs[str(e['id'])] = e
+        scene['layers'] = {
+            'k': int(layers_res['k']), 'cuts': layers_res.get('cuts'),
+            'source': layers_res.get('source', 'parse'),
+            'bands': lb,
+            'composite': ('draw L0 first, then every object whose band == i after '
+                          'plate Li, far to near; recomposes the art exactly'),
+        }
+
     n_sheets = 0
     atlas_src = []
     for plan, cells in zip(res['plans'], res['sprites']):
@@ -252,7 +292,7 @@ def bundle_zip(nat, res, doc, fps=None, scale=1, colors=128, pal=None, atlas=Tru
         atlas_src.append((oid, grid))
         n_frames = len(clean)
         n_sheets += 1
-        scene['objects'].append({
+        entry = {
             'id': oid, 'name': plan.name, 'label': plan.label,
             'z': int(plan.z), 'depth': plan.depth,
             'anchor': [int(plan.cell[0]), int(plan.cell[1])],
@@ -262,7 +302,13 @@ def bundle_zip(nat, res, doc, fps=None, scale=1, colors=128, pal=None, atlas=Tru
             'clips': [{'name': 'idle', 'anim': plan.anim, 'params': plan.params,
                        'frames': N if plan.anim != 'static' else 1,
                        'fps': fps, 'loop': True}],
-        })
+        }
+        lb = layer_objs.get(oid)             # M7: which depth band owns this sprite
+        if lb is not None:
+            entry['band'] = int(lb['band'])
+            entry['foot'] = [int(lb['foot_x']), int(lb['foot_y'])]
+            entry['depth_n'] = lb['depth_n']
+        scene['objects'].append(entry)
     if atlas and atlas_src:
         pages, rects = pack_atlas(atlas_src)
         if pages:

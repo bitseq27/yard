@@ -23,6 +23,9 @@ Routes
   POST /api/render                        {pid,N,fps} -> frame-strip preview + audit
   POST /api/gif                           {pid,N,fps,scale,colors} -> optimized GIF
   POST /api/bundle                        {pid,N,fps} -> game bundle zip (plan §8)
+  POST /api/layers                        {pid,k} -> depth-band layer plates (M7)
+  GET  /api/layers/<pid>                  -> cached layer meta (bands/objects/source)
+  POST /api/layers_regions                {pid} -> band masks as region suggestions
   GET  /api/out/<pid>/{strip.png,preview.gif,bundle.zip}
 """
 import hashlib
@@ -47,7 +50,7 @@ except ImportError:                       # imported as a module, not run from a
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import install_depth_models as dim
 from engine import depth_ml, imaging as im
-from engine import segment, animate, export, depth
+from engine import segment, animate, export, depth, layers
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PROJ = os.path.join(ROOT, 'projects')
@@ -200,15 +203,34 @@ def _render_key(pid, doc, N, fps):
 
 
 _ML_PENDING = set()          # pids whose background depth-ml fuse is still running
+_FUSE_LOCK = threading.Lock()  # one onnx inference at a time: two concurrent DA3
+# sessions (upload-time background fuse + a layers build) double the RAM and the
+# CPU thrash for the same bytes — serialise and share the cached depth_ml.png.
+
+
+def _fused_u8(pid, nat, parse):
+    """The fused map for a project, computed at most once (file-cached), with
+    concurrent callers waiting on the single flight instead of re-running the
+    model. Returns None when the accelerator is unavailable or fails."""
+    fp = os.path.join(_pdir(pid), 'depth_ml.png')
+    if os.path.exists(fp):
+        return np.asarray(Image.open(fp).convert('L'))
+    with _FUSE_LOCK:
+        if os.path.exists(fp):                     # another thread won the race
+            return np.asarray(Image.open(fp).convert('L'))
+        try:
+            u8, _mm = depth_ml.fuse(nat, parse)
+        except Exception as e:
+            print(f'depth_ml fuse failed for {pid}: {type(e).__name__}: {e}')
+            return None
+        if u8 is not None:
+            Image.fromarray(u8).save(fp)
+        return u8
 
 
 def _bg_fuse(pid, nat, parse):
     try:
-        u8, _mm = depth_ml.fuse(nat, parse)
-        if u8 is not None:
-            Image.fromarray(u8).save(os.path.join(_pdir(pid), 'depth_ml.png'))
-    except Exception as e:
-        print(f'depth_ml fuse failed for {pid}: {type(e).__name__}: {e}')
+        _fused_u8(pid, nat, parse)
     finally:
         _ML_PENDING.discard(pid)
 
@@ -294,6 +316,26 @@ def _out_dir(pid):
     return d
 
 
+def _load_layers(pid):
+    """layers.json + plates -> engine-shaped dict for export.bundle_zip (M7)."""
+    mpath = os.path.join(_pdir(pid), 'layers.json')
+    if not os.path.exists(mpath):
+        return None
+    with open(mpath) as f:
+        meta = json.load(f)
+    bands = []
+    for bd in meta.get('bands', []):
+        fp = os.path.join(_pdir(pid), bd['file'])
+        if not os.path.exists(fp):
+            return None
+        bands.append({'i': bd['i'], 'lo': bd['lo'], 'hi': bd['hi'], 'px': bd['px'],
+                      'plate': np.asarray(Image.open(fp))})
+    if not bands:
+        return None
+    return {'k': meta['k'], 'cuts': meta.get('cuts'), 'source': meta.get('source'),
+            'objects': meta.get('objects', []), 'bands': bands}
+
+
 def _clean_cfg(raw):
     """Whitelist + type-coerce auto-seg settings from the UI against engine DEFAULTS.
 
@@ -372,10 +414,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, f.read(), 'text/html; charset=utf-8')
             return
         parts = [p for p in u.path.split('/') if p]
+        if len(parts) == 5 and parts[0] == 'api' and parts[1] == 'image' \
+                and parts[3] == 'layers':
+            # M7 layer plates: /api/image/<pid>/layers/L<i>.png
+            pid, fn = parts[2], parts[4]
+            ok = fn.startswith('L') and fn.endswith('.png') \
+                and fn[1:-4].isdigit()
+            fp = os.path.join(_pdir(pid), 'layers', fn) if ok else ''
+            if not ok or not os.path.exists(fp):
+                self._send(404, {'error': 'not found'})
+                return
+            self._file(fp, 'image/png')
+            return
         if len(parts) == 4 and parts[0] == 'api' and parts[1] == 'image':
             pid, which = parts[2], parts[3]
             if which not in ('native.png', 'original.png', 'depth.png', 'orient.png',
-                              'normal.png', 'depth_ml.png'):
+                              'normal.png', 'depth_ml.png', 'layers_preview.png',
+                              'layers_overlay.png'):
                 self._send(404, {'error': 'not found'})
                 return
             fp = os.path.join(_pdir(pid), which)
@@ -383,14 +438,11 @@ class Handler(BaseHTTPRequestHandler):
                 with contextlib.suppress(Exception):
                     _write_art_views(pid, only=which)     # pre-M6 project: derive it now
             if not os.path.exists(fp) and which == 'depth_ml.png':
-                if pid in _ML_PENDING:               # still fusing: don't double-run
-                    self._send(404, {'error': 'fusing'})
-                    return
+                # M6e/M7: single flight — a concurrent background fuse holds
+                # _FUSE_LOCK, so this GET waits for it instead of re-running
                 with contextlib.suppress(Exception):
                     nat = _native(pid)
-                    u8, _mm = depth_ml.fuse(nat, depth.field(nat)['depth'])
-                    if u8 is not None:
-                        Image.fromarray(u8).save(fp)
+                    _fused_u8(pid, nat, depth.field(nat)['depth'])
             self._file(fp, 'image/png')
             return
         if len(parts) == 4 and parts[0] == 'api' and parts[1] == 'mask':
@@ -423,6 +475,14 @@ class Handler(BaseHTTPRequestHandler):
                                     'mtime': int(os.path.getmtime(_pdir(pid)))})
             out.sort(key=lambda p: p['mtime'])          # recents = recent, not alphabetical
             self._send(200, out)
+            return
+        if len(parts) == 3 and parts[0] == 'api' and parts[1] == 'layers':
+            fp = os.path.join(_pdir(parts[2]), 'layers.json')
+            if not os.path.exists(fp):
+                self._send(404, {'error': 'no layers built for this project yet'})
+                return
+            with open(fp) as f:
+                self._send(200, json.load(f))
             return
         self._send(404, {'error': 'not found'})
 
@@ -465,6 +525,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._wand()
             elif u.path == '/api/autoseg':
                 self._autoseg()
+            elif u.path == '/api/layers':
+                self._layers()
+            elif u.path == '/api/layers_regions':
+                self._layers_regions()
             elif u.path == '/api/edge':
                 self._edge()
             elif u.path == '/api/render':
@@ -710,6 +774,105 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {'ok': True, 'rle': im.rle_encode(m), 'px': st['px'],
                          'bbox': st['bbox']})
 
+    # -- M7: depth layers -------------------------------------------------------
+    def _depth_for_layers(self, pid, doc):
+        """(u8 closeness, source name). Prefers the fused map the depth tab shows
+        (single flight via _fused_u8 — the upload-time thread or this call),
+        else parses."""
+        if depth_ml.available():
+            nat = _native(pid)
+            u8 = _fused_u8(pid, nat, _field(pid, doc)['depth'])
+            if u8 is not None:
+                return u8, depth_ml.source()
+        return np.asarray(_field(pid, doc)['depth'], np.uint8), 'parse'
+
+    def _layers(self):
+        b = self._json_body()
+        pid = b['pid']
+        doc = _load_doc(pid)
+        if doc is None:
+            self._send(404, {'error': 'no such project'})
+            return
+        k = min(max(layers.CFG['min_k'], int(b.get('k', layers.CFG['k']))),
+                layers.CFG['max_k'])
+        if str(b.get('source', 'auto')).lower() == 'parse':
+            d, src = np.asarray(_field(pid, doc)['depth'], np.uint8), 'parse'
+        else:
+            d, src = self._depth_for_layers(pid, doc)
+        key = _field_key(pid, doc) + f'|k{k}|{src}|{ENGINE_V}'
+        mpath = os.path.join(_pdir(pid), 'layers.json')
+        if os.path.exists(mpath) and not b.get('force'):
+            with open(mpath) as f:
+                meta = json.load(f)
+            if meta.get('key') == key:
+                meta.update(ok=True, cached=True)
+                self._send(200, meta)
+                return
+        t0 = time.time()
+        try:
+            with _work_slot(pid, sem=False):          # one build per project
+                nat = _native(pid)
+                objs = _load_objects(pid, doc)        # visible kind=object masks
+                res = layers.separate(nat, d, objects=objs, k=k)
+                ldir = os.path.join(_pdir(pid), 'layers')
+                os.makedirs(ldir, exist_ok=True)
+                bm = layers.band_map(d, res['cuts'])
+                Image.fromarray(bm.astype(np.uint8)).save(
+                    os.path.join(ldir, 'bands.png'), optimize=True)
+                bands_meta = []
+                for bd in res['bands']:
+                    fn = f"L{bd['i']}.png"
+                    Image.fromarray(bd['plate']).save(os.path.join(ldir, fn),
+                                                      optimize=True)
+                    bands_meta.append({'i': bd['i'], 'lo': bd['lo'], 'hi': bd['hi'],
+                                       'px': bd['px'], 'file': f'layers/{fn}'})
+                Image.fromarray(layers.strip(res)).save(
+                    os.path.join(_pdir(pid), 'layers_preview.png'), optimize=True)
+                Image.fromarray(layers.overlay(nat, bm, res['k'])).save(
+                    os.path.join(_pdir(pid), 'layers_overlay.png'), optimize=True)
+                meta = {'ok': True, 'k': res['k'], 'cuts': res['cuts'],
+                        'centers': res['centers'], 'source': src,
+                        'objects': res['objects'], 'bands': bands_meta,
+                        'key': key, 'ms': res['ms'],
+                        'total_ms': round((time.time() - t0) * 1000)}
+                with open(mpath, 'w') as f:
+                    json.dump(meta, f, indent=1)
+        except BusyError as e:
+            self._send(429, {'error': str(e), 'retry': True})
+            return
+        self._send(200, meta)
+
+    def _layers_regions(self):
+        """The built bands as editable region suggestions (depth-driven seg)."""
+        b = self._json_body()
+        pid = b['pid']
+        mpath = os.path.join(_pdir(pid), 'layers.json')
+        bpath = os.path.join(_pdir(pid), 'layers', 'bands.png')
+        if not (os.path.exists(mpath) and os.path.exists(bpath)):
+            self._send(404, {'error': 'build layers first (POST /api/layers)'})
+            return
+        with open(mpath) as f:
+            meta = json.load(f)
+        bm = np.asarray(Image.open(bpath)).astype(np.int32)
+        pos = ('far', 'mid', 'near')
+        out = []
+        for bd in meta['bands']:
+            m = bm == bd['i']
+            st = im.stats_of(m)
+            if not st['px']:
+                continue
+            name = pos[bd['i']] if (meta['k'] == 3 and bd['i'] < 3) \
+                else f"{bd['i'] + 1}/{meta['k']}"
+            c = layers.RAMP[min(bd['i'], len(layers.RAMP) - 1)]
+            out.append({'id': f'band{bd["i"]}', 'name':
+                        f'depth band {name} ({bd["lo"]}-{bd["hi"]})',
+                        'kind': 'region', 'color': list(c), 'cls': 'depth band',
+                        'label': 'depth band', 'conf': 1.0, 'anim': '',
+                        'rle': im.rle_encode(m), 'px': st['px'], 'bbox': st['bbox'],
+                        'depth': st['depth'], 'nfrag': 1})
+        self._send(200, {'ok': True, 'suggestions': out, 'k': meta['k'],
+                         'source': meta.get('source')})
+
     # -- M3: render + exports --------------------------------------------------
     def _render_args(self, b, doc):
         N = int(b.get('N', doc.get('N', 48)) or 48)
@@ -788,14 +951,23 @@ class Handler(BaseHTTPRequestHandler):
                         o['_mask'] = _mask_array(b['pid'], o['id'],
                                                  (doc['native_h'], doc['native_w']))
                 pal = export.shared_palette(res['frames'], colors)
+                layers_res = _load_layers(b['pid']) if int(b.get('layers', 1)) else None
+                dfp = os.path.join(_pdir(b['pid']), 'depth_ml.png')
+                if os.path.exists(dfp):            # M7: ship the field the editor shows
+                    depth_u8 = np.asarray(Image.open(dfp).convert('L'))
+                else:
+                    depth_u8 = np.asarray(_field(b['pid'], doc)['depth'], np.uint8)
                 data, info = export.bundle_zip(nat, res, doc2, fps=fps, scale=1,
-                                               colors=colors, pal=pal, atlas=atlas)
+                                               colors=colors, pal=pal, atlas=atlas,
+                                               layers_res=layers_res,
+                                               depth_u8=depth_u8)
                 with open(os.path.join(_out_dir(b['pid']), 'bundle.zip'), 'wb') as f:
                     f.write(data)
         except BusyError as e:
             self._send(429, {'error': str(e), 'retry': True})
             return
         info.update({'ok': True, 'url': f'/api/out/{b["pid"]}/bundle.zip',
+                     'layers': layers_res['k'] if layers_res else 0,
                      'audit': res['audit'], 'total_ms': round((time.time() - t0) * 1000)})
         self._send(200, info)
 
@@ -813,6 +985,6 @@ if __name__ == '__main__':
     src = depth_ml.source()
     print(f'Pixel Sway {MILESTONE} listening on {port}', flush=True)
     print('depth pass: ' + src + ('' if src != 'parse-only' else
-          ' — the depth tab offers a one-click model install (~120 MB), or run '
-          '`python3 server.py --fetch-depth-models`'), flush=True)
+          f' — the depth tab offers a one-click model install (~{dim.TOTAL_MB} MB), '
+          'or run `python3 server.py --fetch-depth-models`'), flush=True)
     srv.serve_forever()

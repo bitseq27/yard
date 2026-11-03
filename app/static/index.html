@@ -64,6 +64,14 @@
              padding:8px 10px 6px; display:flex; gap:6px; align-items:center; }
   #side h3 .sp { flex:1; }
   #list { flex:1 1 auto; overflow-y:auto; min-height:60px; border-bottom:1px solid var(--line); }
+  #lpanel { flex:0 0 auto; border-bottom:1px solid var(--line); background:var(--panel); }
+  #lpanel h3 { margin:0; }
+  #lbands { max-height:132px; overflow-y:auto; padding:0 4px; }
+  .lband { display:flex; align-items:center; gap:6px; padding:2px 6px; font-size:11px; }
+  .lband .chip { width:12px; height:12px; border-radius:3px; border:1px solid #0008; }
+  .lband .nm { flex:1 1 auto; color:var(--txt); overflow:hidden; text-overflow:ellipsis;
+               white-space:nowrap; }
+  .lband .px { color:var(--dim); font-size:10px; }
   .row { display:flex; align-items:center; gap:6px; padding:4px 8px; cursor:pointer;
          border-left:3px solid transparent; }
   .row:hover { background:var(--panel2); }
@@ -225,6 +233,10 @@
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 2 14 5 8 8 2 5Z"/><path d="M2 8l6 3 6-3M2 11l6 3 6-3"/></svg>masks</button>
       <button data-tab="depth" aria-pressed="false" title="Ground-row closeness map (M6a): bright = near">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="11" height="11"/><path d="M2.5 11l4-3 3 2 4-4"/></svg>depth</button>
+      <button data-tab="layers" aria-pressed="false" title="Depth-band layers (M7): the scene tinted by depth band,
+        far = cool to near = warm. Build plates in the Layers panel (right); the game
+        bundle ships them plus a depthmap for y-sorting walking characters.">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/><rect x="2.5" y="2.5" width="11" height="11"/></svg>layers</button>
       <button data-tab="normals" aria-pressed="false" title="Derived tangent-space normal map (bump from the
         palette-snapped shading)">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.5a3.5 3.5 0 0 1 0 7"/></svg>normals</button>
@@ -232,7 +244,7 @@
         open if needed)">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M5 3.5 12 8l-7 4.5Z"/></svg>anim</button>
       <button id="mlbtn" title="Depth-pass source. On a fresh clone the monocular
-        depth models are not in the repo (~120 MB, gitignored) — click to install them
+        depth models are not in the repo (~220 MB, gitignored) — click to install them
         and the depth tab switches to the model-fused map.">depth: …</button>
     </div>
     <canvas id="view"></canvas>
@@ -245,6 +257,21 @@
       <button class="ib" id="del" title="Delete selected">del</button>
     </h3>
     <div id="list"></div>
+    <div id="lpanel">
+      <h3>Layers <span class="sp"></span><span class="stat" id="lsrc"></span></h3>
+      <div style="display:flex; gap:6px; align-items:center; padding:0 10px 6px;">
+        <label style="font-size:11px; color:var(--dim)">bands</label>
+        <input type="number" id="lk" min="2" max="6" value="3" style="width:44px">
+        <button class="btn" id="lbuild" title="Slice the depth field into banded plates
+          (far→near). Each nearer footprint is inpainted as disocclusion backing; the
+          game bundle ships the plates + a depthmap so characters y-sort correctly.">build</button>
+        <button class="btn" id="lregions" title="Add the built bands to the mask list as
+          editable region masks (depth-driven segmentation)">as regions</button>
+      </div>
+      <div id="lbands"></div>
+      <div class="stat" id="lnote" style="padding:2px 10px 8px;">build to slice the scene into
+        game layers — the bundle picks them up automatically</div>
+    </div>
     <div id="insp"></div>
   </aside>
 </main>
@@ -327,7 +354,7 @@
     <div><span class="k">V B E R L W H</span> select · brush · eraser · rect · lasso ·
       wand · pan</div>
     <div><span class="k">D</span> cycle view tabs: masks → depth (model-fused when the
-      server has a depth model) → normals → anim</div>
+      server has a depth model) → layers (depth bands, M7) → normals → anim</div>
     <div><span class="k">↶ </span> undo / redo buttons (or Ctrl+Z / Ctrl+Shift+Z)</div>
     <div><span class="k">N / A</span> new mask · auto-seg</div>
     <div><span class="k">[ ]</span> nib smaller / bigger &nbsp; <span class="k">+ − 0 1 2</span> zoom</div>
@@ -361,6 +388,7 @@ const S = {
   tool: 'brush', nib: 3, tol: 30, conn: 8, snap: false, wmode: 'hue', add: true,
   dguard: 0, tab: 'masks', depthImg: null, depthMlImg: null, orientImg: null,
   normalImg: null, mlTried: false,
+  layersImg: null, layersMeta: null, layersTried: false,   // M7 depth-band layers
   zoom: 2, ox: 0, oy: 0, dpr: 1,
   dirty: new Set(), docDirty: false,
   undo: [], redo: [],
@@ -535,7 +563,7 @@ function tabPlaceholder(msg) {
   ctx.textAlign = 'start';
 }
 /* M6e one-click accelerator: the tab bar shows the depth-pass source; on a fresh
-   clone (no onnxruntime/models in the repo) it offers the ~120 MB install and shows
+   clone (no onnxruntime/models in the repo) it offers the ~220 MB install and shows
    download progress, then swaps the depth tab to the fused map by itself. */
 let ML_TIMER = 0;
 async function mlRefresh() {
@@ -604,6 +632,92 @@ async function fetchDepthMl() {
       '(monocular layout + parse), bright = near'); }
   } catch (e) { /* parse-only server, or still fusing */ }
 }
+/* M7 layers: the built band meta + the tinted overlay. Best-effort like depth_ml:
+   a project without layers.json just leaves the panel on its hint text. */
+const LRAMP = [[59,91,219],[64,156,255],[55,178,122],[240,177,41],[247,103,7],[214,48,49]];
+async function fetchLayersImg() {
+  if (!S.meta || S.layersImg || S.layersTried) return;
+  S.layersTried = true;
+  try {
+    const rb = await (await fetch(`/api/image/${S.meta.id}/layers_overlay.png`)).blob();
+    if (!rb.type.startsWith('image')) return;
+    S.layersImg = await createImageBitmap(rb);
+    if (S.tab === 'layers') draw();
+  } catch (e) { /* no layers built yet */ }
+}
+async function refreshLayersMeta() {
+  if (!S.meta) return null;
+  try {
+    S.layersMeta = await api('/api/layers/' + S.meta.id);
+  } catch (e) { S.layersMeta = null; }
+  renderLayersPanel();
+  return S.layersMeta;
+}
+function renderLayersPanel() {
+  const m = S.layersMeta;
+  $('lsrc').textContent = m ? m.source : '';
+  const box = $('lbands');
+  box.innerHTML = '';
+  if (!m) return;
+  const pos = ['far', 'mid', 'near'];
+  for (const b of m.bands) {
+    const row = document.createElement('div');
+    row.className = 'lband';
+    const nm = m.k === 3 ? pos[b.i] : `${b.i + 1}/${m.k}`;
+    const c = LRAMP[Math.min(b.i, LRAMP.length - 1)];
+    row.innerHTML = `<span class="chip" style="background:rgb(${c.join(',')})"></span>` +
+      `<span class="nm" title="band ${b.i} — depth ${b.lo}..${b.hi}">L${b.i} ${nm}</span>` +
+      `<span class="px">${b.lo}–${b.hi} · ${(b.px / 1000).toFixed(1)}k px</span>`;
+    box.appendChild(row);
+  }
+  const objs = (m.objects || []).filter(o => o.name);
+  if (objs.length) {
+    const row = document.createElement('div');
+    row.className = 'lband';
+    row.innerHTML = `<span class="nm" style="color:var(--dim)" title="` +
+      objs.map(o => `${o.name}: band ${o.band}`).join(' · ') +
+      `">objects → ${objs.map(o => `${o.name}@L${o.band}`).join(', ')}</span>`;
+    box.appendChild(row);
+  }
+  $('lnote').textContent = `${m.k} bands from ${m.source} — bundle ships ` +
+    `layers/L*.png + depthmap.png (sample at a character's feet for y-sort)`;
+}
+async function buildLayers(force) {
+  if (!S.meta) { setStatus('load an image first'); return; }
+  const b = $('lbuild');
+  b.disabled = true; b.textContent = 'building…';
+  try {
+    const r = await api('/api/layers', { pid: S.meta.id,
+                                         k: Math.max(2, Math.min(6, +$('lk').value || 3)),
+                                         force: !!force });
+    S.layersMeta = r; S.layersImg = null; S.layersTried = false;
+    renderLayersPanel();
+    if (S.tab === 'layers') fetchLayersImg();
+    setStatus(`layers: ${r.k} bands from ${r.source} in ${r.total_ms} ms` +
+              (r.cached ? ' (cached — same field and k)' : ''));
+  } catch (err) { setStatus('layers build failed: ' + err.message); }
+  b.disabled = false; b.textContent = 'build';
+}
+async function layersAsRegions() {
+  if (!S.meta) { setStatus('load an image first'); return; }
+  try {
+    const r = await api('/api/layers_regions', { pid: S.meta.id });
+    sgCache = r.suggestions; sgPrevCanvas = null; sgPrevIdx = -1; S.sgPreview = null;
+    $('modal').classList.add('on');
+    $('mrows').innerHTML = '';
+    const g = document.createElement('div');
+    g.className = 'grp';
+    g.innerHTML = `depth bands (regions) — ${r.suggestions.length} ` +
+      `<button class="ib gall">tick all</button> <button class="ib gnone">none</button>`;
+    $('mrows').appendChild(g);
+    g.querySelector('.gall').onclick = () => { sgCache.forEach(s => { s._box.checked = true; }); updateSel(); };
+    g.querySelector('.gnone').onclick = () => { sgCache.forEach(s => { s._box.checked = false; }); updateSel(); };
+    r.suggestions.forEach((s, i) => $('mrows').appendChild(sgRow(s, i)));
+    updateSel();
+    $('mstat').textContent = `${r.suggestions.length} depth bands from ${r.source} — ` +
+      'tick to import as editable regions';
+  } catch (err) { setStatus('layer regions failed: ' + err.message); }
+}
 function markDirty(m) { S.dirty.add(m); scheduleSave(); }
 function selMask() { return S.masks[S.sel] || null; }
 
@@ -628,6 +742,11 @@ function draw() {
     if (S.depthMlImg) ctx.drawImage(S.depthMlImg, S.ox, S.oy, w, h);
     else if (S.depthImg) ctx.drawImage(S.depthImg, S.ox, S.oy, w, h);
     else tabPlaceholder('no depth field for this project yet');
+    return;
+  }
+  if (S.tab === 'layers') {                          // M7: depth-band tint overlay
+    if (S.layersImg) ctx.drawImage(S.layersImg, S.ox, S.oy, w, h);
+    else tabPlaceholder('no layers built yet — use the Layers panel (right)');
     return;
   }
   if (S.tab === 'normals') {
@@ -958,6 +1077,7 @@ async function openProject(pid) {
   S.img = await createImageBitmap(nb);
   S.depthImg = S.orientImg = null;                 // M6b overlays (best effort)
   S.normalImg = null; S.depthMlImg = null; S.mlTried = false;
+  S.layersImg = null; S.layersMeta = null; S.layersTried = false;
   for (const [key, name] of [['depthImg', 'depth.png'], ['orientImg', 'orient.png'],
                              ['normalImg', 'normal.png']]) {
     try {
@@ -968,6 +1088,7 @@ async function openProject(pid) {
   }
   if (ep !== OPEN_EPOCH) return;
   fetchDepthMl();          // M6e: best-effort, never blocks the open
+  refreshLayersMeta();     // M7: cached layer meta, if this project built any
   for (const o of meta.objects || []) {
     const m = makeMask({ id: o.id, name: o.name, kind: o.kind || 'object',
                          color: o.color || nextColor(S.masks.length), visible: o.visible !== false,
@@ -1050,6 +1171,8 @@ function resetEditor() {
   S.meta = null; S.img = null; S.masks = []; S.sel = -1;
   S.depthImg = null; S.depthMlImg = null; S.orientImg = null; S.normalImg = null;
   S.mlTried = false; S.tab = 'masks';
+  S.layersImg = null; S.layersMeta = null; S.layersTried = false;
+  renderLayersPanel();
   document.querySelectorAll('#tabs button[data-tab]').forEach(b => {
     const on = b.dataset.tab === 'masks';
     b.classList.toggle('on', on);
@@ -1501,6 +1624,8 @@ function closeAutoseg() {
   draw();
 }
 $('autoseg').onclick = () => runAutoseg(false);
+$('lbuild').onclick = () => buildLayers(false);
+$('lregions').onclick = layersAsRegions;
 $('mset').onclick = () => $('msettings').classList.toggle('on');
 $('mrerun').onclick = () => { asgFromForm(); runAutoseg(false); };
 $('asReset').onclick = () => { S.asg = Object.assign({}, ASG_DEFAULT); asgSave(); asgToForm(); };
@@ -1637,8 +1762,10 @@ async function doExportBundle() {
     download(r.url + '?t=' + Date.now(), 'pixel-sway-bundle.zip');
     $('tlstat').textContent = `bundle ${(r.bytes / 1048576).toFixed(2)} MB — ${r.sheets}` +
       ` RGBA sheets, ${r.atlas_pages || 0} atlas pages, ${r.objects} objects,` +
-      ` walkable ${r.walkable_px}px, ${r.total_ms} ms`;
-    setStatus('bundle exported (' + r.sheets + ' sheets)');
+      ` walkable ${r.walkable_px}px` +
+      (r.layers ? `, ${r.layers} depth layers + depthmap` : '') + `, ${r.total_ms} ms`;
+    setStatus('bundle exported (' + r.sheets + ' sheets' +
+              (r.layers ? ` + ${r.layers} layers` : '') + ')');
   } catch (err) { $('tlstat').textContent = 'bundle failed: ' + err.message; }
   tlBusy(false);
 }
@@ -1672,7 +1799,7 @@ $('dguard').onclick = e => {
     ? `wand depth guard ${S.dguard} rows — the flood stops at ground-row jumps`
     : 'wand depth guard off — colour flood only');
 };
-const TABS = ['masks', 'depth', 'normals', 'anim'];
+const TABS = ['masks', 'depth', 'layers', 'normals', 'anim'];
 function setTab(t) {
   if (!S.img) { setStatus('load an image first'); return; }
   if (!TABS.includes(t)) return;               // never trust a stray data-tab
@@ -1683,6 +1810,7 @@ function setTab(t) {
     b.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
   if (t === 'depth') { fetchDepthMl(); mlRefresh(); }
+  if (t === 'layers') fetchLayersImg();
   if (t === 'anim') {
     if (!PV.strip || !PV.N) { doRender().then(() => { if (S.tab === 'anim') pvPlay(true); }); }
     else pvPlay(true);
@@ -1691,6 +1819,9 @@ function setTab(t) {
     : t === 'depth' ? (S.depthMlImg
         ? 'depth tab: model-fused closeness (monocular layout + parse), bright = near'
         : 'depth tab: ground-row closeness, bright = near (drag to pan)')
+    : t === 'layers' ? (S.layersImg
+        ? 'layers tab: depth-band tint over the art — far cool, near warm'
+        : 'layers tab: nothing built yet — Layers panel (right) → build')
     : t === 'normals' ? 'normals tab: tangent-space bump map from the art’s shading'
     : 'anim tab: the rendered loop, playing in place');
   draw();
