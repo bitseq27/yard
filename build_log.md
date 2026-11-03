@@ -6,6 +6,32 @@ decisions taken, problems hit + fixes, and anything a future session must know
 
 ---
 
+## 2026-11-03 — Entry 22: the depth chip and refresh status stop lying about runnability
+
+**Why**: user's refresh click reported `depth pass re-run in 176 ms:
+da-v2-large@w1 — no runnable model, still the parse map`. Decoded: the ViT-L
+FILE is on their disk, but session creation died in milliseconds (no
+onnxruntime in the app's python, or a broken load) — and two gaps made that
+undetectable: `available()`/`source()` promised a model on **file presence
+alone**, and the refresh response swallowed the actual exception.
+
+**Shipped**:
+- `depth_ml.runtime_ok()`: cached real import probe for onnxruntime (the
+  import, not find_spec, so broken DLL/CPU-signal loads count as missing).
+  `candidates()` gates every onnx entry on it — no runtime now means the chip
+  honestly reads `parse-only` and the editor offers the install (which fetches
+  the runtime wheel too), instead of advertising a model that cannot run.
+- the server stashes each fuse's meta per pid (`_ML_META`, failures included);
+  `POST /api/depth_ml/refresh` now returns `runtime`, `error`, `fallback_from`
+  alongside source/model/w/version/ms, and the editor prints the error in the
+  status line — plus an explicit "onnxruntime is missing — click the depth chip
+  to install it" hint when `runtime` is false.
+- `/api/depth_ml/status` gained the same `runtime` flag.
+- test_m6 +2: status carries the runtime flag; refresh on a DEPTH_MODEL=off
+  server reports parse-only/ok=false instead of a model name.
+
+**Verified**: test_m6/m2 + ui_smoke pass (sandbox pinned DEPTH_MODEL=da3).
+
 ## 2026-11-03 — Entry 21: refresh-depth button + stale depth cache invalidation + ORT session/RAM discipline
 
 **Why**: user report — "add a refresh depth button, it seems like the fallback

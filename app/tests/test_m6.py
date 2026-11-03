@@ -366,6 +366,8 @@ def main():
         check('GET /api/depth_ml/status reports source + idle progress',
               code == 200 and stj.get('source') == src and
               stj.get('progress', {}).get('running') is False, str(code))
+        check('status reports whether the onnx runtime imports (entry 22)',
+              stj.get('runtime') is True, str(stj.get('runtime')))
         code, iraw = req('/api/depth_ml/install', body={})
         check('POST /api/depth_ml/install no-ops when models exist',
               code == 200 and json.loads(iraw.decode()).get('already') is True, str(code))
@@ -500,6 +502,13 @@ def main():
             ij = json.loads(r.read())
         check('install refuses while DEPTH_MODEL=off', ij.get('disabled') is True,
               str(ij))
+        rq = urllib.request.Request(base2 + '/api/depth_ml/refresh',
+                                    data=json.dumps({'pid': pid}).encode(),
+                                    headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(rq, timeout=60) as r:
+            rj = json.loads(r.read())
+        check('refresh without an accelerator reports parse-only, not a model',
+              rj.get('ok') is False and rj.get('source') == 'parse-only', str(rj))
     finally:
         srv2.terminate()
         srv2.wait(timeout=10)

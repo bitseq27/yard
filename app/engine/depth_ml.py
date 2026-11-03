@@ -181,6 +181,7 @@ def candidates(models_dir=None):
     out = []
     if want in ('da3', 'torch') and _torch_ok():
         out.append(('da3-torch', 0.9, 'torch'))
+    ort_ok = None                                  # probe lazily, only if needed
     fam = _FAMILIES.get(want, want or None)
     for entry in MODELS:
         name, fn = entry[0], entry[1]
@@ -189,6 +190,10 @@ def candidates(models_dir=None):
         for d in _search_dirs(models_dir):
             p = os.path.join(d, fn)
             if os.path.exists(p) and os.path.getsize(p) > 1e6:
+                if ort_ok is None:
+                    ort_ok = runtime_ok()
+                if not ort_ok:
+                    break                          # files yes, runtime no: parse
                 out.append((name, entry[5], p))
                 break
     return out
@@ -201,6 +206,27 @@ def source(models_dir=None):
 
 _SESS = {}                                  # path -> live InferenceSession (entry 21)
 _SESS_FLOOR = 2 * 1024 ** 3                # cache sessions only above this headroom
+_ORT_OK = None                             # entry 22: cached runtime probe
+
+
+def runtime_ok(ort_dir=None):
+    """Entry 22: can onnxruntime actually be imported here? available() used to
+    promise a model on file presence alone, so a box with the 1.3 GB weights but
+    no runtime reported 'da-v2-large@w1' while every fuse died in milliseconds.
+    Imported once per process; the import (not find_spec) also catches broken
+    DLL/CPU-signal loads."""
+    global _ORT_OK
+    if _ORT_OK is None:
+        import sys
+        for d in _ort_dirs(ort_dir):
+            if os.path.isdir(d) and d not in sys.path:
+                sys.path.insert(0, d)
+        try:
+            import onnxruntime                     # noqa: F401
+            _ORT_OK = True
+        except Exception:
+            _ORT_OK = False
+    return _ORT_OK
 
 
 def _mem_headroom():

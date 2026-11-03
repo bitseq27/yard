@@ -659,7 +659,10 @@ async function mlForceRefresh() {
     const j = await mlRefresh();
     setStatus('depth pass re-run in ' + (r.ms || 0) + ' ms: ' + (r.source || 'parse-only') +
       (r.fallback_from ? ' (fell back from ' + r.fallback_from + ')' : '') +
-      (r.ok ? '' : ' — no runnable model, still the parse map'));
+      (r.ok ? '' : r.runtime === false
+        ? ' — onnxruntime is missing in the server python; click the depth chip to install it'
+        : ' — no runnable model, still the parse map') +
+      (r.error ? ' — ' + r.error : ''));
     if (j && j.source === 'parse-only' && !S.depthMlImg)
       setStatus('depth refresh: server has no runnable depth model — ' +
         'install the models first (see the depth chip)');

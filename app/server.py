@@ -203,6 +203,7 @@ def _render_key(pid, doc, N, fps):
 
 
 _ML_PENDING = set()          # pids whose background depth-ml fuse is still running
+_ML_META = {}                # entry 22: last fuse meta per pid (incl. failures)
 _FUSE_LOCK = threading.Lock()  # one onnx inference at a time: two concurrent DA3
 # sessions (upload-time background fuse + a layers build) double the RAM and the
 # CPU thrash for the same bytes — serialise and share the cached depth_ml.png.
@@ -241,7 +242,9 @@ def _fused_u8(pid, nat, parse, force=False):
             u8, mm = depth_ml.fuse(nat, parse)
         except Exception as e:
             print(f'depth_ml fuse failed for {pid}: {type(e).__name__}: {e}')
+            _ML_META[pid] = {'error': f'{type(e).__name__}: {e}'}
             return None
+        _ML_META[pid] = mm or {}
         if u8 is not None:
             Image.fromarray(u8).save(fp)
             mm = mm or {}
@@ -272,7 +275,12 @@ def _depth_refresh(pid):
     nat = _native(pid)
     u8 = _fused_u8(pid, nat, depth.field(nat)['depth'], force=True)
     out = {'source': depth_ml.source(), 'ok': u8 is not None,
-           'ms': int((time.time() - t0) * 1000)}
+           'ms': int((time.time() - t0) * 1000),
+           'runtime': depth_ml.runtime_ok()}
+    meta = _ML_META.get(pid, {})
+    out.update({k: meta[k] for k in
+                ('model', 'w', 'version', 'fallback_from', 'error')
+                if k in meta})
     mp = os.path.join(_pdir(pid), 'depth_ml.json')
     if os.path.exists(mp):
         with open(mp) as f:
@@ -450,7 +458,9 @@ class Handler(BaseHTTPRequestHandler):
                               'depth_ml': depth_ml.source()})
             return
         if u.path == '/api/depth_ml/status':
-            self._send(200, {'source': depth_ml.source(), 'progress': dim.status()})
+            self._send(200, {'source': depth_ml.source(),
+                             'runtime': depth_ml.runtime_ok(),
+                             'progress': dim.status()})
             return
         if u.path in ('/', '/index.html'):
             with open(os.path.join(ROOT, 'static', 'index.html'), 'rb') as f:
