@@ -368,6 +368,11 @@ def main():
               stj.get('progress', {}).get('running') is False, str(code))
         check('status reports whether the onnx runtime imports (entry 22)',
               stj.get('runtime') is True, str(stj.get('runtime')))
+        import install_depth_models as dim0
+        okp, _e1 = dim0._ort_probe([os.path.join(ROOT, 'app', 'tests', '_ort')])
+        okb, e2 = dim0._ort_probe([os.path.join(ROOT, 'app', 'nope')])
+        check('installer probe separates importable ort dir from broken one',
+              okp is True and okb is False and bool(e2), f'{okp} {okb}')
         code, iraw = req('/api/depth_ml/install', body={})
         check('POST /api/depth_ml/install no-ops when models exist',
               code == 200 and json.loads(iraw.decode()).get('already') is True, str(code))

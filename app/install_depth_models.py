@@ -79,10 +79,29 @@ def _fetch(url, dest):
     return os.path.getsize(dest)
 
 
+def _ort_probe(dirs):
+    """(ok, stderr) — does onnxruntime actually import with `dirs` on the path?
+    Entry 22: a half-unpacked _ort from an interrupted install used to satisfy
+    the 'already unpacked' check forever while every import died. Probe in a
+    subprocess so a broken load cannot poison this process's sys.modules."""
+    import subprocess
+    import sys
+    code = 'import sys; sys.path[:0] = %r; import onnxruntime' % list(dirs)
+    r = subprocess.run([sys.executable, '-c', code], capture_output=True)
+    return r.returncode == 0, r.stderr.decode()[-400:]
+
+
 def _ort_wheel():
     if os.path.isdir(ORT_DIR) and os.listdir(ORT_DIR):
-        _note('onnxruntime already unpacked')
-        return
+        ok, err = _ort_probe([ORT_DIR])
+        if ok:
+            _note('onnxruntime already unpacked')
+            return
+        _note('onnxruntime dir present but does not import; reinstalling')
+        if err:
+            _note(err.splitlines()[-1])
+        import shutil
+        shutil.rmtree(ORT_DIR, ignore_errors=True)
     with urllib.request.urlopen('https://pypi.org/pypi/onnxruntime/json',
                                 timeout=60) as r:
         meta = json.load(r)
@@ -117,6 +136,9 @@ def _ort_wheel():
         z.extractall(ORT_DIR)
     os.remove(whl)
     _note(f'onnxruntime {meta["info"]["version"]} unpacked')
+    ok, err = _ort_probe([ORT_DIR])
+    if not ok:
+        raise RuntimeError('onnxruntime unpacked but does not import: ' + err)
 
 
 def install():
@@ -137,6 +159,10 @@ def install():
             PROGRESS['got'] = 0
             n = _fetch(url, dest)
             _note(f'{fn} {n / 1e6:.0f} MB')
+        ok, err = _ort_probe([ORT_DIR])
+        if not ok:
+            raise RuntimeError('install finished but onnxruntime still does not '
+                               'import (python bitness / VC runtime?): ' + err)
         PROGRESS['done'] = True
         PROGRESS['stage'] = 'done'
         return True

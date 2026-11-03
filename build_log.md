@@ -30,6 +30,17 @@ alone**, and the refresh response swallowed the actual exception.
 - test_m6 +2: status carries the runtime flag; refresh on a DEPTH_MODEL=off
   server reports parse-only/ok=false instead of a model name.
 
+**Follow-up in the same entry (the user's next symptom)**: refresh then read
+`server has no runnable depth model — install the models first`, i.e. the chip
+correctly offered the install — but the installer had its own trap: `_ort_wheel()`
+treated ANY non-empty `app/_ort` as unpacked, so a half-finished earlier install
+left a broken runtime dir that the installer skipped forever while imports kept
+dying. Now `_ort_probe()` (subprocess import test) validates the dir: broken dirs
+are wiped and re-downloaded, a fresh unpack that still fails to import raises
+with the real stderr, and `install()` ends with a final probe so the chip shows
+`install failed — click to retry` with the import error in its tooltip instead
+of silently cycling. test_m6 +1 (probe separates good dir from broken).
+
 **Verified**: test_m6/m2 + ui_smoke pass (sandbox pinned DEPTH_MODEL=da3).
 
 ## 2026-11-03 — Entry 21: refresh-depth button + stale depth cache invalidation + ORT session/RAM discipline
