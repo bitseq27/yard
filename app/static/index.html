@@ -244,7 +244,7 @@
         open if needed)">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M5 3.5 12 8l-7 4.5Z"/></svg>anim</button>
       <button id="mlbtn" title="Depth-pass source. On a fresh clone the monocular
-        depth models are not in the repo (~220 MB, gitignored) — click to install them
+        depth models are not in the repo (~1.9 GB, gitignored) — click to install them
         and the depth tab switches to the model-fused map.">depth: …</button>
     </div>
     <canvas id="view"></canvas>
@@ -563,7 +563,7 @@ function tabPlaceholder(msg) {
   ctx.textAlign = 'start';
 }
 /* M6e one-click accelerator: the tab bar shows the depth-pass source; on a fresh
-   clone (no onnxruntime/models in the repo) it offers the ~220 MB install and shows
+   clone (no onnxruntime/models in the repo) it offers the ~1.9 GB install and shows
    download progress, then swaps the depth tab to the fused map by itself. */
 let ML_TIMER = 0;
 async function mlRefresh() {

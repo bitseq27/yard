@@ -117,6 +117,8 @@ def run_model(path, nat, size=518, norm=IMNET):
         a = np.asarray(img, np.float32) / 255.0
         a = (a - np.array(mean, np.float32)) / np.array(std, np.float32)
         x = np.transpose(a, (2, 0, 1))[None].astype(np.float32)
+        if inp.type == 'tensor(float16)':
+            x = x.astype(np.float16)
     t0 = time.time()
     y = sess.run([out.name], {inp.name: x})[0]
     ms = (time.time() - t0) * 1000
@@ -145,9 +147,11 @@ def candidates(nat, f, with_models, seg=None):
     for lam in (0.5, 1.0, 2.0, 4.0):
         out.append((f'm6a+{lam:g}*hp(sfs)', L(m6a) * 40 + lam * L(hp) * 8, ms_sfs,
                     f'layout m6a + {lam:g}x shading relief'))
-    da = mid = da3 = None
+    da = mid = da3 = dal = None
     if with_models:
         for name, fn, kw in (('midas-v21-small', 'midas_v21_small.onnx', {'size': 256}),
+                             ('da-v2-large-int8@336', 'da_v2_large_quant.onnx', {'size': 336}),
+                             ('da-v2-large', 'da_v2_large.onnx', {}),
                              ('da-v2-small-int8', 'da_v2_small_quant.onnx', {}),
                              ('da-v2-small', 'da_v2_small.onnx', {}),
                              ('da3-small', 'da3_small.onnx', {})):
@@ -169,6 +173,12 @@ def candidates(nat, f, with_models, seg=None):
                 mid = d
             if name == 'da3-small':
                 da3 = d
+            if name == 'da-v2-large':
+                dal = d
+        if dal is not None:
+            for w in (0.7, 0.8, 0.9, 0.95):
+                out.append((f'fuseL{w:g}', w * znorm(dal) + (1 - w) * znorm(m6a), 0.0,
+                            f'rank-free blend: {w:g} DA-v2-ViT-L + {1-w:g} m6a'))
         if da3 is not None:
             hp3 = highpass(da3)
             for w in (0.6, 0.8, 0.9):

@@ -6,6 +6,61 @@ decisions taken, problems hit + fixes, and anything a future session must know
 
 ---
 
+## 2026-11-03 — Entry 20: M7 follow-up 2 — depth pass switches to Depth Anything V2 ViT-L (the user's ComfyUI model)
+
+**Why**: user sent a screenshot of their ComfyUI node
+`DownloadAndLoadDepthAnythingV2Model` (`depth_anything_v2_vitl_fp32.safetensors`,
+precision auto) with "depth is still not good, change to this model". Two facts
+behind it: their app instance still boots parse-only (no accelerator in the app's
+own python — ComfyUI's venv does not count), and they trust exactly one depth
+model: the one their node runs. So the app's default depth pass becomes that
+model: **Depth Anything V2 ViT-L fp32**, onnx export
+`onnx-community/depth-anything-v2-large/onnx/model.onnx` (same weights as the
+safetensors), first in MODELS, plus a quantised twin
+(`model_quantized.onnx`, edge 256) for low-RAM installs. Installer fetches both;
+the editor install button now says ~1.9 GB.
+
+**Fusion weight**: the documented rule (maximise rho+conc+wallrho s.t.
+rho_in >= 0.40) picks **w = 1.0** for the large family — the raw model map, i.e.
+exactly what the ComfyUI node outputs. Measured (quant proxy, courtyard gt):
+
+| candidate | rho | conc | rho_in | wallrho | wflat | rule score |
+|---|---|---|---|---|---|---|
+| dal quant @336 | 0.832 | 0.855 | 0.412 | +0.112 | 0.23 | **1.799** |
+| fuseL0.95 @336 | 0.828 | 0.852 | 0.418 | +0.082 | 0.22 | 1.762 |
+| fuseL0.9 @336 | 0.823 | 0.849 | 0.426 | +0.050 | 0.22 | 1.722 |
+| dal quant @256 | 0.840 | 0.860 | 0.411 | +0.150 | 0.23 | 1.850 (shipped edge) |
+
+**Measurement caveat (why a proxy)**: this sandbox's cgroup caps at 1 GiB. The
+fp32 weights alone are 1.34 GB — unrunnable here at all; the int8 graph needs a
+120 MB attention buffer at 518² and a 73 MB head conv, which fail *inside* the
+server process (they fit in a fresh standalone process). So the numbers above
+are the quantised export at reduced edges; the fp32 map real machines run should
+score at or above them. Do not re-attempt fp32 inference in this sandbox.
+
+**Robustness shipped with it** (`depth_ml.py`):
+- `candidates()` + runtime fall-through in `model_depth()`: a model can be
+  present and still fail to allocate (ViT-L on a small box) — the next model in
+  preference runs instead of silently shipping the flat parse. meta carries
+  `fallback_from`.
+- the failed ORT session is deleted + gc'd in a `finally`: a leaked failed
+  session kept its arena and starved the fallback too (log showed
+  `pthread_create ... Cannot allocate memory` after a ViT-L bad_alloc).
+- `fuse()` weight lookup no longer StopIterations on the torch-path name
+  (`da3-torch` has no MODELS row; default 0.9).
+- DEPTH_MODEL semantics: `da3`/`torch` are now explicit opt-ins for the DA3
+  torch package; unset follows MODELS order (ViT-L first).
+- `enable_cpu_mem_arena=False` was tried as a peak-RAM cure and REVERTED: it
+  raised DA3's peak (arena reuse beats malloc fragmentation) and broke the
+  previously-stable da3 path.
+
+**Sandbox ops**: this box cannot host ViT-L inside the server (the attempt is
+OOM-killed before any catch), so the live server and all suites here run pinned
+`DEPTH_MODEL=da3`; verified under the pin: upload+fuse 200, test_m2/m3/m6/m7,
+ui_smoke all pass. Real machines get ViT-L fp32 by default with the fallback
+chain behind it. Offline (standalone process) the int8 ViT-L fuses the temple
+art fine (map std 80.6).
+
 ## 2026-11-03 — Entry 19: M7 follow-up — torch backend for DA3 + roof/rug/pool disambiguation
 
 **Why**: user uploaded new temple pixel art (`uploads/1_image.png`, 561×729) and

@@ -21,20 +21,25 @@ python3 server.py --fetch-depth-models  # one-shot fetch, then launch as usual
 
 Without step 3 the server boots **parse-only**: the depth tab shows the M6a
 ground-row field (piecewise plates — useful for the wand guard / split / sort tools,
-but visually flat). With the accelerator installed the depth tab shows the
-model-fused map — **Depth Anything 3 small** blended with the parse at w=0.9
-(spearman vs the reference depth **0.885** vs the parse's 0.556; Depth Anything V2
-and MiDaS stay in as fallbacks and `DEPTH_MODEL=off|da3|da|midas` overrides the
-choice, `off` forces parse-only). You can also install it **from the editor**: the
-right-hand end of the view-tab bar shows the depth-pass source and, on a fresh
-clone, an `install models (~220 MB)` button with live download progress
-(`GET /api/depth_ml/status`, `POST /api/depth_ml/install`). If you already run
-**the official `depth-anything-3` torch package** locally, the server detects it
-and prefers it over the onnx export (no fixed-trace resize, GPU when available);
-pick the checkpoint with `DA3_TORCH_MODEL` (default `depth-anything/DA3-SMALL`).
-Backend order: da3-torch → da3 onnx → DA-v2/MiDaS. If your depth output looks
-flat, the status chip reads `parse` — the accelerator is missing or failed to
-load, and the map you see is the parse-only fallback.
+but visually flat). With the accelerator installed the depth tab shows the model
+map — **Depth Anything V2 ViT-L fp32** (the same weights as ComfyUI's
+`DownloadAndLoadDepthAnythingV2Model` / `depth_anything_v2_vitl_fp32.safetensors`),
+used raw: the documented fusion rule picks w=1.0 for the large family, so what
+you see is exactly what that node produces. A quantised twin at a reduced input
+edge covers low-RAM machines; Depth Anything 3 small (blended at w=0.9, spearman
+0.885 on the courtyard reference), DA-v2 small and MiDaS stay in as fallbacks,
+and `DEPTH_MODEL=off|da3|da|midas|torch` overrides the choice (`off` forces
+parse-only, `da3`/`torch` prefer the DA3 paths). You can also install it **from
+the editor**: the right-hand end of the view-tab bar shows the depth-pass source
+and, on a fresh clone, an `install models (~1.9 GB)` button with live download
+progress (`GET /api/depth_ml/status`, `POST /api/depth_ml/install`). If you
+already run **the official `depth-anything-3` torch package** locally,
+`DEPTH_MODEL=torch` uses it (GPU when available; checkpoint via `DA3_TORCH_MODEL`,
+default `depth-anything/DA3-SMALL`). If your depth output looks flat, the status
+chip reads `parse` — the accelerator is missing or failed to load, and the map
+you see is the parse-only fallback. If a model is present but cannot allocate
+on your machine, the server falls through to the next model in preference
+instead of dropping to parse (the status chip names the one that ran).
 
 **Auto-seg labels (M7 follow-up).** Palette alone cannot tell a red tiled roof
 from a red rug, so the recogniser double-gates ground sheets: what sits directly

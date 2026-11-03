@@ -11,9 +11,15 @@ the family on this art:
   midas-v21-small    0.822   0.849   0.364   -0.230   0.20
   da-v2-small-int8   0.848   0.866   0.431   +0.209   0.22
   da3-small (fp32)   0.887   0.887   0.403   +0.240   0.22
-  fuse da3 w=0.9     0.885   0.886   0.455   +0.246   0.23   <-- shipped
-  fuse da3 w=0.8     0.875   0.878   0.469   +0.237   0.25
-  fuse da-v2 w=0.8   0.829*  0.853*  0.454*  (M6e numbers, same rule)
+  fuse da3 w=0.9     0.885   0.886   0.455   +0.246   0.23   (M7 shipped default)
+  da-v2-ViT-L int8   0.832*  0.855*  0.412*  +0.112*  0.23*  (entry 20 default, w=1.0)
+
+* measured through the quantised export at edge 336: this sandbox's 1 GiB cgroup
+cannot hold the 1.34 GB fp32 weights (nor the int8 attention buffer at 518²), so
+the fp32 map the user's machine runs is unmeasurable here — the proxy understates
+it. The user asked for exactly this model (their ComfyUI node runs the same
+weights, fp32), and the documented fusion rule picks w=1.0 for the large family:
+raw model beats every parse blend on rho+conc+wallrho at rho_in >= 0.40.
 
 Fusion weights come from the documented rule, not the eye: maximise
 rho + conc + wallrho subject to within-object rho_in >= 0.40 (keep a majority of
@@ -43,20 +49,33 @@ Backends, in preference order:
      for machines that already run DA3 locally; GPU when present; checkpoint via
      DA3_TORCH_MODEL, default depth-anything/DA3-SMALL, Apache-2.0). No onnx
      install needed at all on those machines.
-  2. onnx  — da3_small.onnx (fp32, folded preprocess), then DA-v2 / MiDaS as
-     fallbacks; fetched by app/install_depth_models.py.
+  2. onnx  — Depth Anything V2 ViT-L first (fp32 `da_v2_large.onnx`, the weights
+     the user's ComfyUI node runs; quantised twin at edge 336 for low-RAM
+     installs), then DA3 small, then DA-v2 small / MiDaS as fallbacks; fetched
+     by app/install_depth_models.py (~1.9 GB with the ViT-L pair).
 """
 import os
 
 import numpy as np
 from PIL import Image
 
-VERSION = 'm7-da3-0.9'
+VERSION = 'm7-da2l-1.0'
 
 IMNET = ((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 # name, onnx file, family, input edge, normalisation, blend weight (model share),
 # orientation ('auto' = row-correlation heuristic; 'far-large' = flip always).
 MODELS = (
+    # Depth Anything V2 ViT-L fp32 — the same weights the user's ComfyUI node
+    # (DownloadAndLoadDepthAnythingV2Model, depth_anything_v2_vitl_fp32.safetensors)
+    # runs; default since entry 20 at user request. w=1.0: the documented rule
+    # (max rho+conc+wallrho s.t. rho_in >= 0.40) picks the RAW model map for the
+    # large family — blending with the parse only costs (measured, entry 20).
+    ('da-v2-large', 'da_v2_large.onnx', 'da', 518, IMNET, 1.0, 'auto'),
+    # quantised twin at a reduced edge for low-RAM machines (1 GiB cgroups: the
+    # fp32 weights alone are 1.34 GB and even the int8 attention buffer at 518²
+    # is 120 MB — edge 256 fits inside the server process and scores rho .840
+    # on the courtyard, above the 336-edge run's .832).
+    ('da-v2-large-int8', 'da_v2_large_quant.onnx', 'da', 256, IMNET, 1.0, 'auto'),
     # DA3 small, fp32, folded-preprocess export: uint8 NHWC in, normalisation is
     # inside the graph; `edge` is the fixed square side the trace was cut for.
     ('da3-small', 'da3_small.onnx', 'da3', 518, IMNET, 0.9, 'far-large'),
@@ -136,20 +155,30 @@ def available(models_dir=None):
     """(model_name, weight, onnx_path|'torch') for the first backend we could
     actually run, else None. Cheap: import/file checks only, no model load.
 
-    Preference: the official depth-anything-3 torch package when importable
-    (machines that run DA3 locally — GPU if present, checkpoint via
-    DA3_TORCH_MODEL, default DA3-SMALL), then the onnx files in MODELS order
-    (DA3 first, then DA-v2, then MiDaS).
+    Preference: the official depth-anything-3 torch package when DEPTH_MODEL
+    asks for it explicitly (machines that run DA3 locally — GPU if present,
+    checkpoint via DA3_TORCH_MODEL, default DA3-SMALL), then the onnx files in
+    MODELS order (ViT-L first since entry 20, then DA3, DA-v2 small, MiDaS).
 
     DEPTH_MODEL env picks the family: 'off' disables the accelerator, 'da3' /
-    'da' ('da2', 'dav2') / 'midas' / 'torch' force one, unset = prefer DA3 and
-    fall back.
+    'da' ('da2', 'dav2') / 'midas' / 'torch' force one, unset = MODELS order.
+    The preference is only a first try: model_depth() falls through this list
+    at RUNTIME too, because a model can be present and still fail to allocate
+    (ViT-L in a 1 GiB cgroup, entry 20) — failing to the next model beats
+    silently shipping the flat parse.
     """
+    c = candidates(models_dir)
+    return c[0] if c else None
+
+
+def candidates(models_dir=None):
+    """Ordered (name, weight, path|'torch') run-preference list, best first."""
     want = os.environ.get('DEPTH_MODEL', '').lower().strip()
     if want == 'off':
-        return None
-    if want in ('', 'da3', 'torch') and _torch_ok():
-        return 'da3-torch', 0.9, 'torch'
+        return []
+    out = []
+    if want in ('da3', 'torch') and _torch_ok():
+        out.append(('da3-torch', 0.9, 'torch'))
     fam = _FAMILIES.get(want, want or None)
     for entry in MODELS:
         name, fn = entry[0], entry[1]
@@ -158,8 +187,9 @@ def available(models_dir=None):
         for d in _search_dirs(models_dir):
             p = os.path.join(d, fn)
             if os.path.exists(p) and os.path.getsize(p) > 1e6:
-                return name, entry[5], p
-    return None
+                out.append((name, entry[5], p))
+                break
+    return out
 
 
 def source(models_dir=None):
@@ -195,6 +225,8 @@ def _run(sess, nat, edge, norm):
         mean, std = norm
         a = (a - np.array(mean, np.float32)) / np.array(std, np.float32)
         x = np.transpose(a, (2, 0, 1))[None].astype(np.float32)
+        if inp.type == 'tensor(float16)':
+            x = x.astype(np.float16)
     out = sess.get_outputs()[0]
     y = sess.run([out.name], {inp.name: x})[0]
     d = np.asarray(y[0], np.float32)
@@ -216,29 +248,47 @@ def model_depth(nat, models_dir=None, ort_dir=None):
     art depth grows toward the bottom row, so a map that correlates negatively
     with the row axis is sign-flipped. Separated from fuse() so the layers pass
     can reuse the model map without re-running the blend."""
-    a = available(models_dir)
+    a = candidates(models_dir)
     if not a:
         return None, None
-    name, _w, path = a
-    if path == 'torch':
-        return _run_torch(nat)
-    orient = 'auto'
-    edge, norm = 518, IMNET
-    for m in MODELS:
-        if m[0] == name:
-            edge, norm, orient = m[3], m[4], m[6]
-    try:
-        sess = _session(path, ort_dir)
-        d = _run(sess, nat, edge, norm)
-    except Exception as e:                      # accelerator stays optional
-        return None, {'model': name, 'error': f'{type(e).__name__}: {e}'}
-    if orient == 'far-large':
-        d = -d
-    elif orient == 'auto':
-        ys = np.mgrid[0:nat.shape[0], 0:nat.shape[1]][0]
-        if np.corrcoef(d.ravel(), ys.ravel())[0, 1] < 0:
+    errs = []
+    for name, _w, path in a:
+        if path == 'torch':
+            d, meta = _run_torch(nat)
+            if d is not None:
+                return d, meta
+            errs.append(f'{name}: {meta.get("error")}')
+            continue
+        orient = 'auto'
+        edge, norm = 518, IMNET
+        for m in MODELS:
+            if m[0] == name:
+                edge, norm, orient = m[3], m[4], m[6]
+        sess = None
+        try:
+            sess = _session(path, ort_dir)
+            d = _run(sess, nat, edge, norm)
+        except Exception as e:                  # accelerator stays optional
+            errs.append(f'{name}: {type(e).__name__}: {e}')
+            continue                            # next model in preference
+        finally:
+            # a failed ORT session keeps its arena until the object dies: on a
+            # memory-ceilinged box that leaked half the RAM and starved the
+            # fallback model too (entry 20).
+            del sess
+            import gc
+            gc.collect()
+        if orient == 'far-large':
             d = -d
-    return d, {'model': name}
+        elif orient == 'auto':
+            ys = np.mgrid[0:nat.shape[0], 0:nat.shape[1]][0]
+            if np.corrcoef(d.ravel(), ys.ravel())[0, 1] < 0:
+                d = -d
+        meta = {'model': name}
+        if errs:
+            meta['fallback_from'] = '; '.join(errs)
+        return d, meta
+    return None, {'model': a[0][0], 'error': '; '.join(errs)}
 
 
 def fuse(nat, parse_depth, models_dir=None, ort_dir=None):
@@ -252,7 +302,7 @@ def fuse(nat, parse_depth, models_dir=None, ort_dir=None):
     if d is None:
         return None, meta
     name = meta['model']
-    w = next(m[5] for m in MODELS if m[0] == name)
+    w = next((m[5] for m in MODELS if m[0] == name), 0.9)   # torch path: DA3's w
     blend = w * _znorm(d) + (1 - w) * _znorm(parse_depth)
     lo, hi = np.percentile(blend, (1, 99))
     u8 = np.clip((blend - lo) / (hi - lo + 1e-9) * 255.0, 0, 255).astype(np.uint8)

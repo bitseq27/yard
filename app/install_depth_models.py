@@ -1,6 +1,6 @@
 """One-click installer for the optional depth accelerator (M6e, M7: DA3).
 
-A fresh clone has NO depth models and NO onnxruntime (both gitignored, ~220 MB
+A fresh clone has NO depth models and NO onnxruntime (both gitignored, ~1.9 GB
 combined), so the depth pass boots parse-only — which reads flat. This module is
 what the editor's "install models" button and `server.py --fetch-depth-models`
 call; it downloads
@@ -37,6 +37,12 @@ PROGRESS = {'running': False, 'stage': '', 'got': 0, 'total': 0,
             'done': False, 'error': None, 'log': []}
 
 MODELS = (
+    ('da_v2_large.onnx',
+     'https://huggingface.co/onnx-community/depth-anything-v2-large/'
+     'resolve/main/onnx/model.onnx'),
+    ('da_v2_large_quant.onnx',
+     'https://huggingface.co/onnx-community/depth-anything-v2-large/'
+     'resolve/main/onnx/model_quantized.onnx'),
     ('da3_small.onnx',
      'https://huggingface.co/zerochocobo/DepthAnything3_ONNX/'
      'resolve/main/da3_small.onnx'),
@@ -47,7 +53,7 @@ MODELS = (
      'https://huggingface.co/Heliosoph/midas-small-onnx/resolve/main/'
      'midas_v21_small_256.onnx'),
 )
-TOTAL_MB = 24 + 101 + 27 + 66
+TOTAL_MB = 24 + 1337 + 347 + 101 + 27 + 66
 
 
 def _note(msg):
