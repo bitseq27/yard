@@ -30,6 +30,7 @@ ANIM_HINT = {
     'lily pad': 'bob',
     'flowering lily pad': 'bob + flutter',
     'pool': 'ripple + shimmer',
+    'roof': 'static',
     'rug': 'static',
     'runner rug': 'static',
     'tassel fringe': 'gustflick',
@@ -64,6 +65,7 @@ def _stats(mask, F):
         'px': px, 'w': w, 'h': h, 'aspect': w / h, 'fill': px / (w * h),
         'solidity': px / max(1, int(filled.sum())),
         'cy': ys.mean() / F['H'],                     # 0 = top of frame, 1 = bottom
+        'y1f': y1 / F['H'],                           # bottom edge, frame fraction
         'top_frac': float((ys < y0 + h / 3).mean()),  # mass in the top third
         'bot_frac': float((ys > y1 - h / 3).mean()),
     }
@@ -78,6 +80,17 @@ def _stats(mask, F):
     by0, by1 = min(y1 + 1, F['H'] - 1), min(y1 + 13, F['H'])
     cx0, cx1 = x0 + w // 5, max(x0 + w // 5 + 1, x1 - w // 5)
     st['brown_below'] = float(F['brown'][by0:by1, cx0:cx1].mean()) if by1 > by0 else 0.0
+
+    # what sits directly ABOVE the sheet: floor material (a rug/pool lies in the
+    # ground plane, so the plate behind it reads floor/stone) or sky/foliage/
+    # another roof tier (a roof floats against the background). Palette alone
+    # cannot separate a red roof from a red rug — this can (M7 follow-up, entry
+    # 19; measured: temple roofs topfloor ~0.0, courtyard rugs ~0.9).
+    ty0, ty1 = max(y0 - 6, 0), y0
+    if ty1 > ty0 and 'floormat' in F:
+        st['topfloor'] = float(F['floormat'][ty0:ty1, x0:x1 + 1].mean())
+    else:
+        st['topfloor'] = 0.0
 
     # trunk: a narrow brown column reaching the object's feet (palms, trees)
     st['trunk'] = False
@@ -108,9 +121,18 @@ def recognise(mask, F, kind, cls):
     if st is None:
         return cls, 0.0
 
-    # ---- water ------------------------------------------------------------
+    # ---- water -------------------------------------------------------------
+    # a teal/blue sheet with sky/foliage above it is tile ROOFING, not a pool:
+    # pools sit in the ground plane, so the plate behind their top edge reads
+    # floor material. Palette alone cannot tell them apart — the hue families
+    # overlap — the context above can (M7 follow-up, entry 19).
     if cls == 'water':
         if kind == 'object':
+            # double gate: context above the sheet AND frame position. A pool can
+            # abut foliage/water above (courtyard pool reads topfloor ~0.7 anyway,
+            # but its centroid sits low — 0.70 measured); roof tiers ride high.
+            if st['topfloor'] < 0.2 and st['cy'] < 0.6:
+                return 'roof', 0.55
             return 'pool', 0.8          # interior water bodies only, by construction
         return ('wall tiles', 0.55) if st['cy'] < 0.45 else ('floor tiles', 0.55)
 
@@ -125,7 +147,17 @@ def recognise(mask, F, kind, cls):
         return 'pot / planter', 0.6
 
     # ---- carpets -----------------------------------------------------------
+    # same context rule as water: a red sheet with sky/foliage/roof above it is
+    # a tiled ROOF (temple art), not a rug — rugs lie in the ground plane, so
+    # the plate behind their top edge reads floor. Matters beyond naming: rugs
+    # are walkable in the bundle walkmask, roofs must not be.
     if cls == 'carpet':
+        # double gate as for water: courtyard rugs whose top edge abuts the pool
+        # or plants read topfloor < 0.2 too (carpet_5: 0.59 cy, carpet_18: 0.88
+        # cy measured) — the centroid guard keeps them rugs. Temple roof tiers
+        # top out at cy 0.53 measured.
+        if st['topfloor'] < 0.2 and st['cy'] < 0.55:
+            return 'roof', 0.6
         return ('runner rug', 0.7) if st['aspect'] >= 1.7 else ('rug', 0.75)
 
     if cls == 'fringe':

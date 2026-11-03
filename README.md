@@ -28,7 +28,20 @@ and MiDaS stay in as fallbacks and `DEPTH_MODEL=off|da3|da|midas` overrides the
 choice, `off` forces parse-only). You can also install it **from the editor**: the
 right-hand end of the view-tab bar shows the depth-pass source and, on a fresh
 clone, an `install models (~220 MB)` button with live download progress
-(`GET /api/depth_ml/status`, `POST /api/depth_ml/install`).
+(`GET /api/depth_ml/status`, `POST /api/depth_ml/install`). If you already run
+**the official `depth-anything-3` torch package** locally, the server detects it
+and prefers it over the onnx export (no fixed-trace resize, GPU when available);
+pick the checkpoint with `DA3_TORCH_MODEL` (default `depth-anything/DA3-SMALL`).
+Backend order: da3-torch → da3 onnx → DA-v2/MiDaS. If your depth output looks
+flat, the status chip reads `parse` — the accelerator is missing or failed to
+load, and the map you see is the parse-only fallback.
+
+**Auto-seg labels (M7 follow-up).** Palette alone cannot tell a red tiled roof
+from a red rug, so the recogniser double-gates ground sheets: what sits directly
+above the sheet's top edge (floor material ⇒ rug/pool; sky/foliage/another tier
+⇒ roof) *and* where the sheet sits in the frame (roofs ride high). This also
+matters for game bundles — rugs are walkable in the bundle walkmask, roofs must
+not be. See build_log entry 19 for the measurements behind the rule.
 
 **Game-scene layers (M7).** The same depth field slices the scene into depth-band
 plates for a game where characters walk around: `POST /api/layers {pid, k}` builds

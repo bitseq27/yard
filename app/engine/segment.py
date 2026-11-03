@@ -346,6 +346,10 @@ def auto_segment(a, max_suggestions=60, cfg=None, conn=8):
         'blossom': (((qh >= 285) & (qh <= 345) & (qs > 0.22) & (qv > 0.30))
                     | ((qh >= 15) & (qh <= 50) & (qs > 0.40) & (qv > 0.45))
                     | ((qs < 0.22) & (qv > 0.72))),
+        # floor-plate material (what lies behind a rug/pool in the ground plane;
+        # never above a roof) — the recogniser's roof-vs-rug context, entry 19
+        'floormat': (_mask(cls, names, 'stone') | _mask(cls, names, 'ground')
+                     | _mask(cls, names, 'misc')),
     }
 
     # ---- water: interior compact bodies are pools; border-touching sheets are material

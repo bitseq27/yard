@@ -33,9 +33,18 @@ the row-correlation heuristic stays only as a backstop.
 
 This module is an OPTIONAL accelerator, not engine core: the engine rule stays
 "numpy + PIL only" for everything the render/sprite/audit path touches, and this
-file imports onnxruntime lazily, inside `fuse()`, only when a runtime AND a model
-file are actually present. Without them `fuse()` returns None and the server keeps
-shipping the pure parse field — same bytes as M6b.
+file imports onnxruntime (or torch + the official depth-anything-3 package)
+lazily, inside `fuse()`, only when a runtime AND a model are actually present.
+Without them `fuse()` returns None and the server keeps shipping the pure parse
+field — same bytes as M6b.
+
+Backends, in preference order:
+  1. torch — the official `depth-anything-3` package when importable (the path
+     for machines that already run DA3 locally; GPU when present; checkpoint via
+     DA3_TORCH_MODEL, default depth-anything/DA3-SMALL, Apache-2.0). No onnx
+     install needed at all on those machines.
+  2. onnx  — da3_small.onnx (fp32, folded preprocess), then DA-v2 / MiDaS as
+     fallbacks; fetched by app/install_depth_models.py.
 """
 import os
 
@@ -61,7 +70,42 @@ MODELS = (
 
 # DEPTH_MODEL env spellings -> family
 _FAMILIES = {'da3': 'da3', 'da': 'da', 'da2': 'da', 'dav2': 'da', 'da-v2': 'da',
-             'midas': 'midas'}
+             'midas': 'midas', 'torch': 'torch'}
+
+
+def _torch_ok():
+    """True when the OFFICIAL depth-anything-3 package + torch are importable —
+    the path for machines that already run DA3 locally (GPU when present, any
+    checkpoint via DA3_TORCH_MODEL). Checked lazily; never a hard dependency."""
+    import importlib.util as iu
+    return (iu.find_spec('torch') is not None
+            and iu.find_spec('depth_anything_3') is not None)
+
+
+_TORCH = {}
+
+
+def _torch_session():
+    if 'm' not in _TORCH:
+        import torch
+        from depth_anything_3.api import DepthAnything3
+        dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        m = DepthAnything3.from_pretrained(
+            os.environ.get('DA3_TORCH_MODEL', 'depth-anything/DA3-SMALL'))
+        _TORCH['m'] = (m.to(device=dev), dev)
+    return _TORCH['m']
+
+
+def _run_torch(nat):
+    """Depth via the official package. Its output is distance (far = large), so
+    the sign is flipped here to this module's closer = larger convention."""
+    try:
+        m, _dev = _torch_session()
+        pred = m.inference([np.ascontiguousarray(nat, np.uint8)])
+        d = np.asarray(pred.depth[0], np.float64)
+    except Exception as e:                      # accelerator stays optional
+        return None, {'model': 'da3-torch', 'error': f'{type(e).__name__}: {e}'}
+    return -d, {'model': 'da3-torch'}
 
 
 def _search_dirs(extra=None):
@@ -89,16 +133,23 @@ def _ort_dirs(extra=None):
 
 
 def available(models_dir=None):
-    """(model_name, weight, onnx_path) for the first model we could actually run,
-    else None. Cheap: file checks only, no import. MODELS order is preference:
-    DA3 first, then DA-v2, then MiDaS.
+    """(model_name, weight, onnx_path|'torch') for the first backend we could
+    actually run, else None. Cheap: import/file checks only, no model load.
+
+    Preference: the official depth-anything-3 torch package when importable
+    (machines that run DA3 locally — GPU if present, checkpoint via
+    DA3_TORCH_MODEL, default DA3-SMALL), then the onnx files in MODELS order
+    (DA3 first, then DA-v2, then MiDaS).
 
     DEPTH_MODEL env picks the family: 'off' disables the accelerator, 'da3' /
-    'da' ('da2', 'dav2') / 'midas' force one, unset = prefer DA3 and fall back.
+    'da' ('da2', 'dav2') / 'midas' / 'torch' force one, unset = prefer DA3 and
+    fall back.
     """
     want = os.environ.get('DEPTH_MODEL', '').lower().strip()
     if want == 'off':
         return None
+    if want in ('', 'da3', 'torch') and _torch_ok():
+        return 'da3-torch', 0.9, 'torch'
     fam = _FAMILIES.get(want, want or None)
     for entry in MODELS:
         name, fn = entry[0], entry[1]
@@ -169,6 +220,8 @@ def model_depth(nat, models_dir=None, ort_dir=None):
     if not a:
         return None, None
     name, _w, path = a
+    if path == 'torch':
+        return _run_torch(nat)
     orient = 'auto'
     edge, norm = 518, IMNET
     for m in MODELS:

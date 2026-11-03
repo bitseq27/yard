@@ -21,6 +21,7 @@ import urllib.request
 import numpy as np
 from PIL import Image
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gt_stats                                             # noqa: E402
 
@@ -229,6 +230,38 @@ def main():
             detail.append(f'{gname}->{lab}{"!" if lab != want else ""}')
         check('recognised labels match the hand-labelled fixture', seen >= 8 and good / seen >= 0.8,
               f'{good}/{seen}: ' + ', '.join(detail))
+        # M7 follow-up (entry 19): palette alone cannot separate a red roof from a
+        # red rug (same hue family) — the context above the sheet plus its frame
+        # position can. Synthetic frame, direct call.
+        from engine import recognise as rec  # noqa: E402  (app/ is the server's cwd)
+        HH = WW = 120
+        F = {'H': HH, 'W': WW, 'hue': np.zeros((HH, WW)), 'sat': np.zeros((HH, WW)),
+             'val': np.full((HH, WW), 0.5), 'brown': np.zeros((HH, WW), bool),
+             'green': np.zeros((HH, WW), bool), 'blossom': np.zeros((HH, WW), bool),
+             'floormat': np.zeros((HH, WW), bool)}
+        hi = np.zeros((HH, WW), bool); hi[10:40, 30:90] = True     # red sheet, sky above
+        lo = np.zeros((HH, WW), bool); lo[75:115, 30:90] = True   # red sheet, floor around
+        wh = np.zeros((HH, WW), bool); wh[15:45, 20:100] = True   # teal sheet, sky above
+        wl = np.zeros((HH, WW), bool); wl[70:110, 20:100] = True  # teal sheet, floor around
+        F['floormat'][64:, :] = True     # floor plate behind/around the ground sheets
+        check('a red sheet with sky above is a roof, in the floor a rug',
+              rec.recognise(hi, F, 'object', 'carpet')[0] == 'roof' and
+              rec.recognise(lo, F, 'object', 'carpet')[0] == 'rug',
+              f"{rec.recognise(hi, F, 'object', 'carpet')[0]} / "
+              f"{rec.recognise(lo, F, 'object', 'carpet')[0]}")
+        check('a teal sheet with sky above is a roof, in the floor a pool',
+              rec.recognise(wh, F, 'object', 'water')[0] == 'roof' and
+              rec.recognise(wl, F, 'object', 'water')[0] == 'pool',
+              f"{rec.recognise(wh, F, 'object', 'water')[0]} / "
+              f"{rec.recognise(wl, F, 'object', 'water')[0]}")
+        # the centroid gate: a LOW red sheet with plants/water above its top edge
+        # (courtyard carpet_5 class of regression) must stay a rug, not a roof.
+        F2 = dict(F, floormat=np.zeros((HH, WW), bool))
+        F2['floormat'][100:, :] = True
+        mid = np.zeros((HH, WW), bool); mid[70:100, 30:90] = True   # cy 0.71
+        check('a low sheet with non-floor above stays a rug (centroid gate)',
+              rec.recognise(mid, F2, 'object', 'carpet')[0] in ('rug', 'runner rug'),
+              rec.recognise(mid, F2, 'object', 'carpet')[0])
         census = {}
         for sg in sugs:
             census[sg['label']] = census.get(sg['label'], 0) + 1

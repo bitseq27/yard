@@ -6,6 +6,56 @@ decisions taken, problems hit + fixes, and anything a future session must know
 
 ---
 
+## 2026-11-03 — Entry 19: M7 follow-up — torch backend for DA3 + roof/rug/pool disambiguation
+
+**Why**: user uploaded new temple pixel art (`uploads/1_image.png`, 561×729) and
+reported (a) "depth is not good" and (b) "autoseg is not working". Diagnosis:
+(a) their depth map is byte-identical to the parse-only fallback — their machine
+runs DA3 locally outside the app, but the app had no path to it, so it silently
+degraded; the same image fused with da3-small on the server looks right.
+(b) autoseg returns 200 with coherent masks, but palette-only classify labels
+the temple's red tiled roofs "rug" and its blue roofs "pool" — which also
+poisons the bundle walkmask, since `rug` ∈ WALKABLE_LABELS: characters would
+walk on rooftops.
+
+**Shipped — torch backend** (`engine/depth_ml.py`): when the OFFICIAL
+`depth-anything-3` package + torch are importable, they are preferred over the
+onnx export (no fixed 518² trace, keeps DA3's native resolution handling);
+checkpoint via `DA3_TORCH_MODEL` (default `depth-anything/DA3-SMALL`,
+Apache-2.0), GPU when available. `available()` reports path `'torch'` and
+`model_depth()` branches on it. Backend order: da3-torch → da3 onnx →
+DA-v2/MiDaS. Never a hard dependency — lazily probed, silent fallthrough.
+
+**Shipped — roof rule** (`engine/recognise.py`, `engine/segment.py`): palette
+alone cannot separate a red roof from a red rug (same hue families — measured,
+class-space cues all dead: sky-fraction above the sheet is 0.0 on BOTH arts
+because the temple's pale sky misses classify's `light` class; below-edge
+composition overlaps too; even the fused-depth residual vs the row-band median
+overlaps — courtyard rugs read as negative as temple roofs). What separates
+them is a double gate: (1) `topfloor` — the fraction of floor material
+(`F['floormat']` = stone|ground|misc) in a 6-px band directly above the sheet's
+top edge; rugs/pools lie in the ground plane so the plate behind reads floor
+(courtyard carpets ~0.9), roofs float against sky/foliage/upper tiers (temple
+roofs ~0.0–0.2). (2) Frame position — the topfloor cue alone regressed two
+courtyard rugs whose top edges abut the pool/plants (carpet_5, carpet_18), so
+the roof call also requires `cy < 0.55` (carpet) / `cy < 0.6` (water): temple
+roof tiers top out at cy 0.53 measured, courtyard rugs at 0.59+. Result:
+courtyard fixture back to **10/10** (was 8/10), temple roofs now labelled
+`roof` (top-3 sheets: 28.7k/23.2k/20.1k px) instead of rug/pool, and the
+walkmask no longer invites characters onto rooftops. The courtyard census
+gained 8 `roof` labels — all cy 0.11–0.30 wall/eave-top sheets, an improvement
+(they read "rug"/"pool" on walls before).
+
+**Verified**: test_m2 (fixture 10/10 + three new synthetic recogniser checks
+incl. the centroid gate), test_m3, test_m6, test_m7, ui_smoke — all pass.
+Suites must run solo: m3/m6/m7 each spawn a server; overlapping runs collide
+on ports (RemoteDisconnected), which is not a code failure.
+
+**Dead ends (do not retry)**: sky-fraction separator; below-edge class
+composition; depth-residual separator; per-object class-space cues generally —
+the class vocabulary is art-specific. Any future improvement should come from
+structure (parse plates, scene-level repetition), not palette statistics.
+
 ## 2026-11-03 — Entry 18: M7 — Depth Anything 3 depth pass + depth-band layers for game scenes
 
 **Why**: two asks in one. (1) The depth map still read flat on fresh clones — the
