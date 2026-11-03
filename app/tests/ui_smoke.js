@@ -123,6 +123,21 @@ async function main() {
   check('mask list rendered a row', doc.querySelectorAll('#list .row').length === 1);
   check('inspector rendered', doc.getElementById('insp').textContent.length > 0);
   check('no boot errors', errors.length === 0, errors.join('; '));
+  // ---- entry 21: the refresh-depth button appears and re-runs the pass -----
+  const mlref = doc.getElementById('mlref');
+  check('refresh-depth button shows once a project is open',
+    !!mlref && !mlref.hidden, mlref ? String(mlref.hidden) : 'missing');
+  if (mlref) {
+    mlref.onclick();
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      if (/#mlref|depth pass re-run|depth refresh/.test(doc.getElementById('status').textContent) &&
+          !mlref.disabled) break;
+    }
+    check('clicking refresh-depth re-runs the server depth pass',
+      /depth pass re-run|depth refresh/.test(doc.getElementById('status').textContent),
+      doc.getElementById('status').textContent.slice(0, 80));
+  }
 
   // ---- paint a stroke (creates a new mask, since none selected) -----------
   key('1');                                   // native 1:1, origin 0,0

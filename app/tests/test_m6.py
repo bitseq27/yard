@@ -400,6 +400,24 @@ def main():
                 code, _m2 = req(f'/api/image/{pid}/depth_ml.png')
                 check('a missing depth_ml.png rebuilds on first GET',
                       code == 200 and os.path.exists(ml_path), str(code))
+            # entry 21: the refresh-depth button's endpoint
+            side = os.path.join(ROOT, 'app', 'projects', pid, 'depth_ml.json')
+            check('fuse writes a source sidecar next to the map',
+                  os.path.exists(side) and
+                  json.load(open(side)).get('source') == src, src)
+            code, r = jreq('/api/depth_ml/refresh', {'pid': pid})
+            mtime0 = os.path.getmtime(ml_path)
+            check('POST /api/depth_ml/refresh re-runs the pass',
+                  code == 200 and r.get('ok') and r.get('source') == src and
+                  os.path.getmtime(ml_path) >= mtime0, f'{code} {r}')
+            with open(side, 'w') as f:          # pretend an older model wrote it
+                json.dump({'source': 'some-old-model@w0.1'}, f)
+            code, _m3 = req(f'/api/image/{pid}/depth_ml.png')
+            check('a stale sidecar invalidates the cached map on next GET',
+                  code == 200 and
+                  json.load(open(side)).get('source') == src, str(code))
+            code, _r4 = jreq('/api/depth_ml/refresh', {'pid': 'nope-nope'})
+            check('refresh on an unknown project is a 404', code == 404, str(code))
         else:
             check('no accelerator present -> parse-only depth (M6b bytes)',
                   not os.path.exists(ml_path), src)

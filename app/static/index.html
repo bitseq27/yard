@@ -40,7 +40,8 @@
           font-size:11px; padding:4px 10px; border-radius:6px; cursor:pointer;
           display:flex; gap:5px; align-items:center; }
   #tabs button:hover { color:var(--txt); background:#262630; }
-  #tabs #mlbtn { margin-left:auto; opacity:.75; font-size:11px; }
+  #tabs #mlbtn, #tabs #mlref { margin-left:auto; opacity:.75; font-size:11px; }
+  #tabs #mlbtn + #mlref { margin-left:6px; }
   #tabs #mlbtn.on { opacity:1; }
   #tabs button.on { background:#2f4a3f; color:#c9f5e2; }
   #tabs svg { width:13px; height:13px; }
@@ -246,6 +247,11 @@
       <button id="mlbtn" title="Depth-pass source. On a fresh clone the monocular
         depth models are not in the repo (~1.9 GB, gitignored) — click to install them
         and the depth tab switches to the model-fused map.">depth: …</button>
+      <button id="mlref" hidden title="Re-run the depth pass for this project with
+        whatever model the server has right now, dropping the cached map. Use it
+        after installing models (or changing DEPTH_MODEL) on a project that was
+        uploaded while the server fell back to the parse-only map.">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.7-3.8"/><path d="M13 2.5V5h-2.5"/></svg>refresh depth</button>
     </div>
     <canvas id="view"></canvas>
     <div id="hint">No image loaded.<br>Drop a pixel-art PNG here, or click “Load image”.<br>
@@ -621,16 +627,47 @@ async function mlInstall() {
 /* M6e: the fused depth map is built in a server background thread after upload,
    so it is fetched lazily (open + first visit to the depth tab) and a missing one
    simply leaves the parse map on screen. */
-async function fetchDepthMl() {
-  if (!S.meta || S.depthMlImg || S.mlTried) return;
+async function fetchDepthMl(force) {
+  if (!S.meta || S.depthMlImg && !force || S.mlTried && !force) return;
   S.mlTried = true;
   try {
-    const rb = await (await fetch(`/api/image/${S.meta.id}/depth_ml.png`)).blob();
+    // cache-buster: the map can be re-fused server-side (refresh button, model
+    // install) and the browser would otherwise hand back the stale bytes
+    const rb = await (await fetch(`/api/image/${S.meta.id}/depth_ml.png?t=${Date.now()}`)).blob();
     if (!rb.type.startsWith('image')) return;
     S.depthMlImg = await createImageBitmap(rb);
     if (S.tab === 'depth') { draw(); setStatus('depth tab: model-fused closeness ' +
       '(monocular layout + parse), bright = near'); }
   } catch (e) { /* parse-only server, or still fusing */ }
+}
+/* entry 21: the refresh-depth button. Re-runs the depth pass server-side with
+   whatever model is present now (the cached map is dropped first), then reloads
+   the map here. Cures projects uploaded while the server was parse-only: those
+   kept showing the fallback map because the lazy fetch only ever tries once. */
+async function mlForceRefresh() {
+  const b = $('mlref');
+  if (!S.meta || !b || b.disabled) return;
+  b.disabled = true;
+  const old = b.innerHTML;
+  b.textContent = 'refreshing…';
+  try {
+    const r = await (await fetch('/api/depth_ml/refresh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pid: S.meta.id }) })).json();
+    S.depthMlImg = null; S.mlTried = false;
+    await fetchDepthMl(true);
+    const j = await mlRefresh();
+    setStatus('depth pass re-run in ' + (r.ms || 0) + ' ms: ' + (r.source || 'parse-only') +
+      (r.fallback_from ? ' (fell back from ' + r.fallback_from + ')' : '') +
+      (r.ok ? '' : ' — no runnable model, still the parse map'));
+    if (j && j.source === 'parse-only' && !S.depthMlImg)
+      setStatus('depth refresh: server has no runnable depth model — ' +
+        'install the models first (see the depth chip)');
+  } catch (e) {
+    setStatus('depth refresh failed: ' + e.message);
+  }
+  b.disabled = false; b.innerHTML = old;
+  if (S.tab === 'depth') draw();
 }
 /* M7 layers: the built band meta + the tinted overlay. Best-effort like depth_ml:
    a project without layers.json just leaves the panel on its hint text. */
@@ -1070,6 +1107,7 @@ async function openProject(pid) {
   const meta = await api('/api/project/' + pid);
   if (ep !== OPEN_EPOCH) return;
   S.meta = meta; S.W = meta.native_w; S.H = meta.native_h;
+  if ($('mlref')) $('mlref').hidden = false;      // entry 21: per-project control
   $('tlN').value = meta.N || 48; $('tlFps').value = meta.fps || 12;
   S.masks = []; S.sel = -1; S.undo = []; S.redo = []; S.dirty.clear(); syncHist();
   overlay.width = S.W; overlay.height = S.H;
@@ -1169,6 +1207,7 @@ $('pdel').onclick = async () => {
 function resetEditor() {
   OPEN_EPOCH++;   // cancel any in-flight openProject (M5 race fix)
   S.meta = null; S.img = null; S.masks = []; S.sel = -1;
+  if ($('mlref')) $('mlref').hidden = true;
   S.depthImg = null; S.depthMlImg = null; S.orientImg = null; S.normalImg = null;
   S.mlTried = false; S.tab = 'masks';
   S.layersImg = null; S.layersMeta = null; S.layersTried = false;
@@ -1192,6 +1231,7 @@ function resetEditor() {
 }
 $('hundo').onclick = () => undo();
 if ($('mlbtn')) $('mlbtn').onclick = () => mlInstall();
+if ($('mlref')) $('mlref').onclick = () => mlForceRefresh();
 mlRefresh();
 $('hredo').onclick = () => redo();
 $('helpbtn').onclick = () => $('help').classList.toggle('on');

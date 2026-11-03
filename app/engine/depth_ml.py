@@ -54,7 +54,9 @@ Backends, in preference order:
      installs), then DA3 small, then DA-v2 small / MiDaS as fallbacks; fetched
      by app/install_depth_models.py (~1.9 GB with the ViT-L pair).
 """
+import contextlib
 import os
+import sys
 
 import numpy as np
 from PIL import Image
@@ -197,7 +199,41 @@ def source(models_dir=None):
     return f'{a[0]}@w{a[1]:g}' if a else 'parse-only'
 
 
+_SESS = {}                                  # path -> live InferenceSession (entry 21)
+_SESS_FLOOR = 2 * 1024 ** 3                # cache sessions only above this headroom
+
+
+def _mem_headroom():
+    """Bytes of memory this process may still allocate. cgroup-aware (the
+    sandbox caps the whole box at 1 GiB while /proc/meminfo advertises the
+    host), falling back to MemAvailable, then to 'plenty'."""
+    try:
+        with open('/sys/fs/cgroup/memory.max') as f:
+            mx = f.read().strip()
+        if mx != 'max':
+            with open('/sys/fs/cgroup/memory.current') as f:
+                return int(mx) - int(f.read().strip())
+    except Exception:
+        pass
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemAvailable:'):
+                    return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    return 1 << 62
+
+
 def _session(path, ort_dir=None):
+    """One InferenceSession per model file per process WHEN THE BOX CAN AFFORD
+    to keep it. Re-creating a session for every fuse leaves resident RAM behind
+    each cycle (five fuses killed a 1 GiB server, entry 21), but caching every
+    session pins ~300 MB per process — fatal when two processes fuse at once
+    (test client + server). So: cache above 2 GB headroom, per-call below."""
+    s = _SESS.get(path)
+    if s is not None:
+        return s
     import sys
     for d in _ort_dirs(ort_dir):
         if os.path.isdir(d) and d not in sys.path:
@@ -207,7 +243,10 @@ def _session(path, ort_dir=None):
     so.inter_op_num_threads = 4
     so.intra_op_num_threads = 4
     so.log_severity_level = 3
-    return ort.InferenceSession(path, so, providers=['CPUExecutionProvider'])
+    sess = ort.InferenceSession(path, so, providers=['CPUExecutionProvider'])
+    if _mem_headroom() > _SESS_FLOOR:
+        _SESS[path] = sess
+    return sess
 
 
 def _run(sess, nat, edge, norm):
@@ -241,6 +280,41 @@ def _znorm(a):
     return (a - a.mean()) / (a.std() + 1e-9)
 
 
+def _worker_main():
+    """Entry 21: run one model in a throwaway process. argv: onnx, edge, png.
+    Writes the raw float32 map to stdout. Small boxes (<= 2 GB headroom) fuse
+    out-of-process because each in-process session cycle ratchets resident RAM
+    and never fully returns it — a subprocess gives it all back on exit."""
+    import sys
+    path, edge, png = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+    nat = np.asarray(Image.open(png).convert('RGB'))
+    sess = _session(path)
+    d = _run(sess, nat, edge, IMNET)
+    sys.stdout.buffer.write(d.astype(np.float32).tobytes())
+
+
+def _run_subprocess(path, edge, nat):
+    import subprocess
+    import tempfile
+    app = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
+        tmp = tf.name
+        Image.fromarray(np.ascontiguousarray(nat, np.uint8)).save(tf)
+    try:
+        code = ('import sys; sys.path.insert(0, %r); '
+                'from engine import depth_ml as m; m._worker_main()' % app)
+        r = subprocess.run([sys.executable, '-c', code, path, str(edge), tmp],
+                           capture_output=True, timeout=600)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.decode()[-300:] or 'worker exit %d'
+                               % r.returncode)
+        d = np.frombuffer(r.stdout, np.float32).astype(np.float64)
+        return d.reshape(nat.shape[0], nat.shape[1])
+    finally:
+        with contextlib.suppress(Exception):
+            os.remove(tmp)
+
+
 def model_depth(nat, models_dir=None, ort_dir=None):
     """Raw model closeness map (float64, higher = nearer, native resolution) or
     (None, meta). Orientation is made explicit per model (DA3's raw output is
@@ -266,18 +340,23 @@ def model_depth(nat, models_dir=None, ort_dir=None):
                 edge, norm, orient = m[3], m[4], m[6]
         sess = None
         try:
-            sess = _session(path, ort_dir)
-            d = _run(sess, nat, edge, norm)
+            if _mem_headroom() > _SESS_FLOOR:
+                sess = _session(path, ort_dir)
+                d = _run(sess, nat, edge, norm)
+                if _SESS.get(path) is not sess:
+                    del sess        # not cached (small box): free it now
+            else:
+                d = _run_subprocess(path, edge, nat)   # RAM returns on exit
         except Exception as e:                  # accelerator stays optional
             errs.append(f'{name}: {type(e).__name__}: {e}')
+            if sess is not None and _SESS.get(path) is sess:
+                # a session that failed mid-run keeps its arena: evict it so the
+                # fallback model gets the RAM (entry 20's starvation case)
+                del _SESS[path]
+                del sess
+                import gc
+                gc.collect()
             continue                            # next model in preference
-        finally:
-            # a failed ORT session keeps its arena until the object dies: on a
-            # memory-ceilinged box that leaked half the RAM and starved the
-            # fallback model too (entry 20).
-            del sess
-            import gc
-            gc.collect()
         if orient == 'far-large':
             d = -d
         elif orient == 'auto':

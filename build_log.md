@@ -6,6 +6,43 @@ decisions taken, problems hit + fixes, and anything a future session must know
 
 ---
 
+## 2026-11-03 — Entry 21: refresh-depth button + stale depth cache invalidation + ORT session/RAM discipline
+
+**Why**: user report — "add a refresh depth button, it seems like the fallback
+depth method is the only type shown". Root causes found, three of them:
+1. The editor's lazy depth fetch tries **once per page load** (`S.mlTried`); a
+   project opened while the server was parse-only kept the parse map on screen
+   forever, even after the models appeared.
+2. The server cached `depth_ml.png` per project with **no provenance**: a map
+   fused by an older model/VERSION (or the parse era) was served as-is forever.
+3. Fusing repeatedly in one server process ratchets resident RAM (each ORT
+   session load/unload cycle leaves arena/allocator residue): five fuses killed
+   a 1 GiB server mid-request, which is what earlier looked like "the endpoint
+   just dies".
+
+**Shipped**:
+- `POST /api/depth_ml/refresh {pid}`: drops the project's cached map + sidecar
+  and re-fuses with whatever model is present now; returns source/model/w/
+  version/ms/fallback_from. Editor gains a `refresh depth` button in the tab bar
+  (visible once a project is open) that calls it, reloads the map with a
+  cache-buster and reports the result in the status line.
+- Provenance sidecar `depth_ml.json` next to every fused map
+  (`source` = model@w as in the status chip). `_ml_cache_fresh()` gates both the
+  GET handler and `_fused_u8`: stale cache (other model, older VERSION, missing
+  sidecar) re-fuses on next request — old projects pick up newly installed
+  models without re-upload or even the button.
+- ORT session discipline in `depth_ml`: sessions are cached per model file when
+  the box has >2 GB headroom (`_mem_headroom()`, cgroup-aware), and below that
+  the fuse runs in a **throwaway subprocess** (`_worker_main`) so every byte of
+  ORT RAM returns to the OS on exit. A session that fails mid-run is evicted so
+  it cannot starve the fallback model (entry 20's starvation case).
+- ui_smoke drives the button for real (jsdom + live server): appears on open,
+  click re-runs the pass, status reports `depth pass re-run in N ms: <source>`.
+
+**Verified**: test_m2/m3/m6/m7 + ui_smoke all pass (sandbox pinned
+DEPTH_MODEL=da3 as in entry 20); m6 gained four checks (sidecar written, refresh
+re-runs, stale sidecar invalidates on GET, 404 on unknown pid).
+
 ## 2026-11-03 — Entry 20: M7 follow-up 2 — depth pass switches to Depth Anything V2 ViT-L (the user's ComfyUI model)
 
 **Why**: user sent a screenshot of their ComfyUI node

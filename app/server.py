@@ -208,23 +208,46 @@ _FUSE_LOCK = threading.Lock()  # one onnx inference at a time: two concurrent DA
 # CPU thrash for the same bytes — serialise and share the cached depth_ml.png.
 
 
-def _fused_u8(pid, nat, parse):
+def _ml_cache_fresh(pid):
+    """Entry 21: is the project's cached fused map from the current depth pass?
+    A cache written by another model / older VERSION / the parse-only era is
+    stale; serving it as-is is what kept old projects on the fallback map."""
+    fp = os.path.join(_pdir(pid), 'depth_ml.png')
+    if not os.path.exists(fp):
+        return False
+    try:
+        with open(os.path.join(_pdir(pid), 'depth_ml.json')) as f:
+            return json.load(f).get('source') == depth_ml.source()
+    except Exception:
+        return False
+
+
+def _fused_u8(pid, nat, parse, force=False):
     """The fused map for a project, computed at most once (file-cached), with
     concurrent callers waiting on the single flight instead of re-running the
-    model. Returns None when the accelerator is unavailable or fails."""
+    model. Returns None when the accelerator is unavailable or fails.
+
+    The cache carries a sidecar (depth_ml.json: model + blend + VERSION); a stale
+    cache (other model, older VERSION, pre-sidecar) re-fuses instead of serving.
+    """
     fp = os.path.join(_pdir(pid), 'depth_ml.png')
-    if os.path.exists(fp):
+    mp = os.path.join(_pdir(pid), 'depth_ml.json')
+    if not force and _ml_cache_fresh(pid):
         return np.asarray(Image.open(fp).convert('L'))
     with _FUSE_LOCK:
-        if os.path.exists(fp):                     # another thread won the race
-            return np.asarray(Image.open(fp).convert('L'))
+        if not force and _ml_cache_fresh(pid):
+            return np.asarray(Image.open(fp).convert('L'))   # won the race
         try:
-            u8, _mm = depth_ml.fuse(nat, parse)
+            u8, mm = depth_ml.fuse(nat, parse)
         except Exception as e:
             print(f'depth_ml fuse failed for {pid}: {type(e).__name__}: {e}')
             return None
         if u8 is not None:
             Image.fromarray(u8).save(fp)
+            mm = mm or {}
+            mm['source'] = depth_ml.source()
+            with open(mp, 'w') as f:
+                json.dump(mm, f)
         return u8
 
 
@@ -233,6 +256,30 @@ def _bg_fuse(pid, nat, parse):
         _fused_u8(pid, nat, parse)
     finally:
         _ML_PENDING.discard(pid)
+
+
+def _depth_refresh(pid):
+    """Entry 21: drop the project's cached fused map and re-run the depth pass
+    with whatever model is present NOW. Returns the response dict; the handler
+    sends it. A project fused while the server was parse-only (or under an
+    older model/VERSION) used to keep showing that fallback until re-upload."""
+    if not pid or not os.path.isdir(_pdir(pid)):
+        return 404, {'error': 'unknown project'}
+    for fn in ('depth_ml.png', 'depth_ml.json'):
+        with contextlib.suppress(Exception):
+            os.remove(os.path.join(_pdir(pid), fn))
+    t0 = time.time()
+    nat = _native(pid)
+    u8 = _fused_u8(pid, nat, depth.field(nat)['depth'], force=True)
+    out = {'source': depth_ml.source(), 'ok': u8 is not None,
+           'ms': int((time.time() - t0) * 1000)}
+    mp = os.path.join(_pdir(pid), 'depth_ml.json')
+    if os.path.exists(mp):
+        with open(mp) as f:
+            side = json.load(f)
+        out.update({k: side[k] for k in
+                    ('model', 'w', 'version', 'fallback_from') if k in side})
+    return 200, out
 
 
 def _write_art_views(pid, nat=None, only=None):
@@ -437,9 +484,11 @@ class Handler(BaseHTTPRequestHandler):
             if not os.path.exists(fp) and which in ('depth.png', 'orient.png', 'normal.png'):
                 with contextlib.suppress(Exception):
                     _write_art_views(pid, only=which)     # pre-M6 project: derive it now
-            if not os.path.exists(fp) and which == 'depth_ml.png':
+            if which == 'depth_ml.png' and not _ml_cache_fresh(pid):
                 # M6e/M7: single flight — a concurrent background fuse holds
-                # _FUSE_LOCK, so this GET waits for it instead of re-running
+                # _FUSE_LOCK, so this GET waits for it instead of re-running.
+                # Entry 21: also re-fuses a cache left by another model/VERSION
+                # (or the parse-only era), so old projects pick the model up.
                 with contextlib.suppress(Exception):
                     nat = _native(pid)
                     _fused_u8(pid, nat, depth.field(nat)['depth'])
@@ -521,6 +570,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._save_project(rest)
             elif u.path == '/api/masks':
                 self._masks()
+            elif u.path == '/api/depth_ml/refresh':
+                try:
+                    pid = (json.loads(self._raw or b'{}') or {}).get('pid', '')
+                except Exception:
+                    pid = ''
+                code, out = _depth_refresh(pid)
+                self._send(code, out)
             elif u.path == '/api/wand':
                 self._wand()
             elif u.path == '/api/autoseg':

@@ -39,7 +39,11 @@ default `depth-anything/DA3-SMALL`). If your depth output looks flat, the status
 chip reads `parse` — the accelerator is missing or failed to load, and the map
 you see is the parse-only fallback. If a model is present but cannot allocate
 on your machine, the server falls through to the next model in preference
-instead of dropping to parse (the status chip names the one that ran).
+instead of dropping to parse (the status chip names the one that ran). The tab
+bar's **refresh depth** button re-runs the depth pass for the open project with
+whatever model the server has right now — use it after installing models (or
+changing `DEPTH_MODEL`) on a project that was uploaded while the server still
+fell back; stale caches also re-fuse by themselves on the next depth-tab visit.
 
 **Auto-seg labels (M7 follow-up).** Palette alone cannot tell a red tiled roof
 from a red rug, so the recogniser double-gates ground sheets: what sits directly
