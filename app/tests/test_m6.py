@@ -373,6 +373,19 @@ def main():
         okb, e2 = dim0._ort_probe([os.path.join(ROOT, 'app', 'nope')])
         check('installer probe separates importable ort dir from broken one',
               okp is True and okb is False and bool(e2), f'{okp} {okb}')
+        fake = {'urls': [
+            {'packagetype': 'bdist_wheel', 'url': 'U32',
+             'filename': 'onnxruntime-1.20.0-cp311-cp311-win32.whl'},
+            {'packagetype': 'bdist_wheel', 'url': 'U64',
+             'filename': 'onnxruntime-1.20.0-cp311-cp311-win_amd64.whl'},
+            {'packagetype': 'bdist_wheel', 'url': 'UL',
+             'filename': 'onnxruntime-1.20.0-cp311-cp311-manylinux_2_27_x86_64.whl'}]}
+        check('wheel picker matches windows bitness (entry 22: win32 wheel on '
+              '64-bit python was the DLL failure)',
+              dim0._wheel_url(fake, 'Windows', 'AMD64', True, 'cp31') == 'U64' and
+              dim0._wheel_url(fake, 'Windows', 'AMD64', False, 'cp31') == 'U32' and
+              dim0._wheel_url(fake, 'Linux', 'x86_64', True, 'cp31') == 'UL',
+              dim0._wheel_url(fake, 'Windows', 'AMD64', True, 'cp31'))
         code, iraw = req('/api/depth_ml/install', body={})
         check('POST /api/depth_ml/install no-ops when models exist',
               code == 200 and json.loads(iraw.decode()).get('already') is True, str(code))

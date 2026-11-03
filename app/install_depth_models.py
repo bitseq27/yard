@@ -91,6 +91,40 @@ def _ort_probe(dirs):
     return r.returncode == 0, r.stderr.decode()[-400:]
 
 
+def _wheel_url(meta, sysname=None, machine=None, bits64=None, ver=None):
+    """Pick the onnxruntime wheel for THIS interpreter. Entry 22 follow-up: the
+    old picker normalised the machine to 'x86_64', which never appears in a
+    Windows wheel name ('win_amd64' / 'win32'), so the exact match always missed
+    on Windows and the any-wheel fallback handed a 64-bit python the 32-bit
+    win32 wheel — 'DLL load failed: %1 is not a valid Win32 application'."""
+    import sys
+    import platform
+    sysname = (sysname or platform.system()).lower()
+    machine = (machine or platform.machine()).lower()
+    bits64 = (sys.maxsize > 2**32) if bits64 is None else bits64
+    ver = ver or f'cp{sys.version_info.major}{sys.version_info.minor}'
+    if sysname == 'windows':
+        tag = ('win_arm64' if machine in ('arm64', 'aarch64')
+               else 'win_amd64' if bits64 else 'win32')
+        ladder = ([ver, tag], [ver, 'amd64' if bits64 else 'win32'], [ver])
+    elif sysname == 'darwin':
+        arch = 'arm64' if machine in ('arm64', 'aarch64') else 'x86_64'
+        ladder = ([ver, 'macosx', arch], [ver, 'macosx'], [ver])
+    else:
+        arch = 'aarch64' if machine in ('arm64', 'aarch64') else 'x86_64'
+        ladder = ([ver, 'manylinux', arch], [ver, 'manylinux'],
+                  [ver, 'linux', arch], [ver])
+    for want in ladder:
+        for f in meta['urls']:
+            if f['packagetype'] != 'bdist_wheel':
+                continue
+            if all(w in f['filename'] for w in want):
+                return f['url']
+    raise RuntimeError(f'no onnxruntime wheel for python {ver} on '
+                       f'{sysname}/{machine} ({"64" if bits64 else "32"}-bit) — '
+                       'install onnxruntime yourself and re-run, or set ORT_PATH')
+
+
 def _ort_wheel():
     if os.path.isdir(ORT_DIR) and os.listdir(ORT_DIR):
         ok, err = _ort_probe([ORT_DIR])
@@ -105,27 +139,7 @@ def _ort_wheel():
     with urllib.request.urlopen('https://pypi.org/pypi/onnxruntime/json',
                                 timeout=60) as r:
         meta = json.load(r)
-    import sys
-    import platform
-    ver = f'cp{sys.version_info.major}{sys.version_info.minor}'
-    sysname, machine = platform.system().lower(), platform.machine().lower()
-    plat = ('manylinux' if sysname == 'linux' else
-            'macosx' if sysname == 'darwin' else 'win') if sysname else ''
-    mach = ('x86_64' if machine in ('x86_64', 'amd64') else
-            'arm64' if machine in ('arm64', 'aarch64') else machine)
-    url = None
-    for f in meta['urls']:                     # exact platform match first …
-        if f['packagetype'] == 'bdist_wheel' and ver in f['filename'] \
-                and plat in f['filename'] and mach in f['filename']:
-            url = f['url']
-    if not url:                                # … then any wheel for this python
-        for f in meta['urls']:
-            if f['packagetype'] == 'bdist_wheel' and ver in f['filename']:
-                url = f['url']
-    if not url:
-        raise RuntimeError(f'no onnxruntime wheel for python {ver} on '
-                           f'{sysname}/{mach} — install onnxruntime yourself and '
-                           f're-run, or set ORT_PATH')
+    url = _wheel_url(meta)
     PROGRESS['stage'] = 'onnxruntime wheel'
     PROGRESS['got'] = 0
     whl = os.path.join(HERE, 'projects', '_ort.whl')

@@ -41,6 +41,17 @@ with the real stderr, and `install()` ends with a final probe so the chip shows
 `install failed — click to retry` with the import error in its tooltip instead
 of silently cycling. test_m6 +1 (probe separates good dir from broken).
 
+**And the root cause of the broken unpack (user's next paste)**: `DLL load
+failed ... %1 is not a valid Win32 application` — the wheel picker normalised
+the machine to `x86_64`, a string that never appears in Windows wheel names
+(`win_amd64` / `win32`), so its exact match always missed on Windows and the
+any-wheel fallback handed 64-bit python the 32-bit win32 wheel. `_wheel_url()`
+now builds a per-platform tag ladder (win_amd64/win32/win_arm64, macosx+arch,
+manylinux+arch, bitness from `sys.maxsize`) and test_m6 pins it with a fake
+pypi payload: 64-bit Windows must get U64, 32-bit U32, linux the manylinux
+wheel. The probe-then-wipe logic above turns the next chip click into a clean
+reinstall of the correct wheel.
+
 **Verified**: test_m6/m2 + ui_smoke pass (sandbox pinned DEPTH_MODEL=da3).
 
 ## 2026-11-03 — Entry 21: refresh-depth button + stale depth cache invalidation + ORT session/RAM discipline
